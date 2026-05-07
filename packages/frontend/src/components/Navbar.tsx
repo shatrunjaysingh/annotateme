@@ -148,9 +148,9 @@ export default function Navbar() {
           {menuOpen && (
             <div style={styles.dropdownMenu} onMouseLeave={() => setMenuOpen(false)}>
               <div style={styles.dropdownInfo}>
-                <div style={{ fontWeight: 600 }}>{user?.username}</div>
-                <div style={{ fontSize: 12, color: '#8c8c8c' }}>{user?.email}</div>
-                <div style={{ fontSize: 11, color: '#1890ff', marginTop: 2 }}>{user?.role?.toUpperCase()}</div>
+                <div style={{ fontWeight: 600, color: '#e0e0e0' }}>{user?.username}</div>
+                <div style={{ fontSize: 12, color: '#707070' }}>{user?.email}</div>
+                <div style={{ fontSize: 11, color: '#4dabf7', marginTop: 2 }}>{user?.role?.toUpperCase()}</div>
               </div>
               <div style={styles.dropdownDivider} />
               {(user?.role === 'admin' || user?.role === 'manager') && (
@@ -175,29 +175,29 @@ export default function Navbar() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  nav: { height: 48, background: '#fff', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' },
+  nav: { height: 48, background: '#141414', borderBottom: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 1px 6px rgba(0,0,0,0.4)' },
   left: { display: 'flex', alignItems: 'center', gap: 16 },
   logo: { display: 'flex', alignItems: 'center', gap: 8 },
-  logoText: { fontWeight: 700, fontSize: 16, color: '#1890ff', letterSpacing: '-0.3px' },
+  logoText: { fontWeight: 700, fontSize: 16, color: '#4dabf7', letterSpacing: '-0.3px' },
   links: { display: 'flex', alignItems: 'center', gap: 4 },
-  link: { padding: '4px 12px', borderRadius: 4, fontSize: 14, color: '#595959', textDecoration: 'none', transition: 'color 0.15s, background 0.15s' },
-  linkActive: { color: '#1890ff', fontWeight: 500, background: '#e6f4ff' },
+  link: { padding: '4px 12px', borderRadius: 4, fontSize: 14, color: '#a0a0a0', textDecoration: 'none', transition: 'color 0.15s, background 0.15s' },
+  linkActive: { color: '#4dabf7', fontWeight: 500, background: 'rgba(77,171,247,0.12)' },
   right: { display: 'flex', alignItems: 'center', gap: 12 },
-  iconBtn: { color: '#595959', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 4 },
+  iconBtn: { color: '#a0a0a0', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 4 },
   dropdown: { position: 'relative' },
-  userBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px', borderRadius: 6, fontSize: 14, color: '#262626' },
+  userBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px', borderRadius: 6, fontSize: 14, color: '#e0e0e0' },
   avatar: { width: 28, height: 28, borderRadius: '50%', background: '#1890ff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13 },
-  username: { color: '#262626', fontSize: 14 },
-  dropdownMenu: { position: 'absolute', right: 0, top: 'calc(100% + 8px)', background: '#fff', border: '1px solid #f0f0f0', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', minWidth: 200, overflow: 'hidden', zIndex: 200 },
-  dropdownInfo: { padding: '12px 16px', borderBottom: '1px solid #f0f0f0' },
-  dropdownDivider: { height: 1, background: '#f0f0f0', margin: '4px 0' },
-  dropdownItem: { display: 'block', width: '100%', textAlign: 'left', padding: '8px 16px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: '#262626', transition: 'background 0.15s' },
+  username: { color: '#e0e0e0', fontSize: 14 },
+  dropdownMenu: { position: 'absolute', right: 0, top: 'calc(100% + 8px)', background: '#1f1f1f', border: '1px solid #2a2a2a', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.5)', minWidth: 200, overflow: 'hidden', zIndex: 200 },
+  dropdownInfo: { padding: '12px 16px', borderBottom: '1px solid #2a2a2a' },
+  dropdownDivider: { height: 1, background: '#2a2a2a', margin: '4px 0' },
+  dropdownItem: { display: 'block', width: '100%', textAlign: 'left', padding: '8px 16px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: '#e0e0e0', transition: 'background 0.15s' },
   // Tenant switcher
-  tenantBadge: { display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 6, background: '#f5f5f5', color: '#595959', fontSize: 13 },
+  tenantBadge: { display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 6, background: '#2a2a2a', color: '#a0a0a0', fontSize: 13 },
   tenantDropdownWrap: { position: 'relative' },
-  tenantBtn: { display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 6, background: '#f5f5f5', border: 'none', cursor: 'pointer', fontSize: 13, color: '#595959', transition: 'background 0.15s' },
+  tenantBtn: { display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 6, background: '#2a2a2a', border: 'none', cursor: 'pointer', fontSize: 13, color: '#a0a0a0', transition: 'background 0.15s' },
   tenantName: { maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  tenantMenu: { position: 'absolute', top: 'calc(100% + 6px)', left: 0, background: '#fff', border: '1px solid #f0f0f0', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', minWidth: 180, zIndex: 200, overflow: 'hidden' },
-  tenantMenuItem: { display: 'block', width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#262626' },
-  tenantMenuItemActive: { background: '#e6f4ff', color: '#1890ff', fontWeight: 500 },
+  tenantMenu: { position: 'absolute', top: 'calc(100% + 6px)', left: 0, background: '#1f1f1f', border: '1px solid #2a2a2a', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.5)', minWidth: 180, zIndex: 200, overflow: 'hidden' },
+  tenantMenuItem: { display: 'block', width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#e0e0e0' },
+  tenantMenuItemActive: { background: 'rgba(77,171,247,0.12)', color: '#4dabf7', fontWeight: 500 },
 };
