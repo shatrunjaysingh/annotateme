@@ -8,6 +8,7 @@ const baseLinks = [
   { to: '/projects', label: 'Projects' },
   { to: '/tasks', label: 'Tasks' },
   { to: '/jobs', label: 'Jobs' },
+  { to: '/annotations', label: 'Annotations' },
   { to: '/cloud-storage', label: 'Cloud Storages' },
   { to: '/analytics', label: 'Analytics' },
   { to: '/reports', label: 'Reports' },

@@ -8,6 +8,7 @@ import ProjectDetail from './pages/ProjectDetail';
 import Jobs from './pages/Jobs';
 import AnnotationEditor from './pages/AnnotationEditor';
 import Analytics from './pages/Analytics';
+import Annotations from './pages/Annotations';
 import CloudStorage from './pages/CloudStorage';
 import Users from './pages/Users';
 import Reports from './pages/Reports';
@@ -27,6 +28,7 @@ export default function App() {
       <Route path="/jobs" element={<ProtectedRoute><Jobs /></ProtectedRoute>} />
       <Route path="/jobs/:id/annotate" element={<ProtectedRoute><AnnotationEditor /></ProtectedRoute>} />
       <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
+      <Route path="/annotations" element={<ProtectedRoute><Annotations /></ProtectedRoute>} />
       <Route path="/cloud-storage" element={<ProtectedRoute><CloudStorage /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />
       <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
