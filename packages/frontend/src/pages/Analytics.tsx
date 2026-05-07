@@ -17,10 +17,16 @@ export default function Analytics() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Check if Grafana is actually reachable before showing iframe
+  // Check if Grafana is actually reachable — must return JSON with database:ok,
+  // not the React app's index.html fallback which also returns HTTP 200.
   useEffect(() => {
     fetch('/grafana/api/health', { signal: AbortSignal.timeout(3000) })
-      .then(r => setGrafanaUp(r.ok))
+      .then(async r => {
+        const ct = r.headers.get('content-type') || '';
+        if (!r.ok || !ct.includes('application/json')) return setGrafanaUp(false);
+        const body = await r.json();
+        setGrafanaUp(body?.database === 'ok');
+      })
       .catch(() => setGrafanaUp(false));
   }, []);
 
