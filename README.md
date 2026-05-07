@@ -371,10 +371,6 @@ kill -9 <PID>  # Kill process
 3. Test locally
 4. Submit pull request
 
-## License
-
-MIT License
-
 ## Support
 
 For issues and questions, please open an issue on the repository.
