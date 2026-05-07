@@ -1,0 +1,13 @@
+{
+  "name": "annotateme",
+  "version": "1.0.0",
+  "description": "Data annotation and labeling platform with collaboration features",
+  "private": true,
+  "workspaces": [
+    "packages/backend",
+    "packages/frontend"
+  ],
+  "devDependencies": {
+    "typescript": "^5.1.3"
+  }
+}

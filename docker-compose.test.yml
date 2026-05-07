@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./packages/frontend
+      dockerfile: Dockerfile
+    container_name: annotateme_frontend_test
+    ports:
+      - "4200:80"
+    networks:
+      - annotateme
+
+volumes:
+  postgres_data:
+
+networks:
+  annotateme:
+    driver: bridge
