@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import client from '../api/client';
-import { useNavigate } from 'react-router-dom';
+import Navbar from '../components/Navbar';
 
 type Tab = 'org' | 'user' | 'label';
 
@@ -152,7 +152,6 @@ function renderDrillRows(columns: string[], rows: any[]) {
 }
 
 export default function Reports() {
-  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('org');
   const [summary, setSummary] = useState<Summary | null>(null);
   const [orgData, setOrgData] = useState<OrgRow[]>([]);
@@ -206,10 +205,7 @@ export default function Reports() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-      <div style={{ background: '#001529', padding: '0 24px', height: 56, display: 'flex', alignItems: 'center', gap: 20 }}>
-        <button style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.65)', cursor: 'pointer', fontSize: 13 }} onClick={() => navigate('/projects')}>← Back</button>
-        <span style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Reports & Analytics</span>
-      </div>
+      <Navbar />
 
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: 24 }}>
         {/* Summary cards */}
