@@ -1,0 +1,136 @@
+{
+  "id": null,
+  "uid": "annotateme-main",
+  "title": "AnnotateMe Analytics",
+  "tags": ["annotateme"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+
+    { "id": 1, "type": "stat", "title": "Total Projects",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "#1890ff", "value": null }] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [{ "refId": "A", "rawSql": "SELECT COUNT(*) AS value FROM projects", "format": "table" }]
+    },
+
+    { "id": 2, "type": "stat", "title": "Total Tasks",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "#722ed1", "value": null }] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [{ "refId": "A", "rawSql": "SELECT COUNT(*) AS value FROM tasks", "format": "table" }]
+    },
+
+    { "id": 3, "type": "stat", "title": "Total Jobs",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "#fa8c16", "value": null }] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [{ "refId": "A", "rawSql": "SELECT COUNT(*) AS value FROM jobs", "format": "table" }]
+    },
+
+    { "id": 4, "type": "stat", "title": "Active Users",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "#52c41a", "value": null }] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [{ "refId": "A", "rawSql": "SELECT COUNT(*) AS value FROM users WHERE \"isActive\" = true", "format": "table" }]
+    },
+
+    { "id": 5, "type": "stat", "title": "Completed Jobs",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "#13c2c2", "value": null }] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [{ "refId": "A", "rawSql": "SELECT COUNT(*) AS value FROM jobs WHERE state = 'completed'", "format": "table" }]
+    },
+
+    { "id": 6, "type": "stat", "title": "Annotated Frames",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "#eb2f96", "value": null }] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [{ "refId": "A", "rawSql": "SELECT COALESCE(SUM(\"annotatedItems\"), 0) AS value FROM projects", "format": "table" }]
+    },
+
+    { "id": 7, "type": "piechart", "title": "Jobs by State",
+      "gridPos": { "x": 0, "y": 4, "w": 8, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "pieType": "donut", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] } },
+      "targets": [{ "refId": "A", "rawSql": "SELECT state AS metric, COUNT(*) AS value FROM jobs GROUP BY state ORDER BY value DESC", "format": "table" }]
+    },
+
+    { "id": 8, "type": "piechart", "title": "Jobs by Stage",
+      "gridPos": { "x": 8, "y": 4, "w": 8, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "pieType": "pie", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] } },
+      "targets": [{ "refId": "A", "rawSql": "SELECT stage AS metric, COUNT(*) AS value FROM jobs GROUP BY stage ORDER BY value DESC", "format": "table" }]
+    },
+
+    { "id": 9, "type": "barchart", "title": "Projects by Status",
+      "gridPos": { "x": 16, "y": 4, "w": 8, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "options": { "orientation": "horizontal", "xTickLabelRotation": 0, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [{ "refId": "A", "rawSql": "SELECT status AS \"Status\", COUNT(*) AS \"Count\" FROM projects GROUP BY status ORDER BY \"Count\" DESC", "format": "table" }]
+    },
+
+    { "id": 10, "type": "timeseries", "title": "Annotations Over Time",
+      "gridPos": { "x": 0, "y": 12, "w": 16, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "rawSql": "SELECT date_trunc('day', \"updatedAt\") AS time, COUNT(*) AS \"Annotations\" FROM annotations WHERE \"updatedAt\" >= $__timeFrom() AND \"updatedAt\" <= $__timeTo() GROUP BY 1 ORDER BY 1", "format": "time_series" },
+        { "refId": "B", "rawSql": "SELECT date_trunc('day', \"createdAt\") AS time, COUNT(*) AS \"New Jobs\" FROM jobs WHERE \"createdAt\" >= $__timeFrom() AND \"createdAt\" <= $__timeTo() GROUP BY 1 ORDER BY 1", "format": "time_series" }
+      ]
+    },
+
+    { "id": 11, "type": "timeseries", "title": "Completed Jobs Over Time",
+      "gridPos": { "x": 16, "y": 12, "w": 8, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "#52c41a", "mode": "fixed" }, "custom": { "lineWidth": 2, "fillOpacity": 20 } } },
+      "options": { "tooltip": { "mode": "single" } },
+      "targets": [{ "refId": "A", "rawSql": "SELECT date_trunc('day', \"updatedAt\") AS time, COUNT(*) AS \"Completed\" FROM jobs WHERE state = 'completed' AND \"updatedAt\" >= $__timeFrom() AND \"updatedAt\" <= $__timeTo() GROUP BY 1 ORDER BY 1", "format": "time_series" }]
+    },
+
+    { "id": 12, "type": "table", "title": "Top Annotators",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 9 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Completion %" }, "properties": [{ "id": "custom.displayMode", "value": "basic" }, { "id": "color", "value": { "mode": "continuous-GrYlRd" } }, { "id": "min", "value": 0 }, { "id": "max", "value": 100 }] }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Completed", "desc": true }] },
+      "targets": [{ "refId": "A", "rawSql": "SELECT u.username AS \"User\", u.role AS \"Role\", COUNT(j.id) AS \"Assigned\", SUM(CASE WHEN j.state = 'completed' THEN 1 ELSE 0 END) AS \"Completed\", CASE WHEN COUNT(j.id) > 0 THEN ROUND(SUM(CASE WHEN j.state = 'completed' THEN 1 ELSE 0 END) * 100.0 / COUNT(j.id), 1) ELSE 0 END AS \"Completion %\" FROM users u LEFT JOIN jobs j ON j.\"assigneeId\" = u.id GROUP BY u.id, u.username, u.role ORDER BY \"Completed\" DESC LIMIT 20", "format": "table" }]
+    },
+
+    { "id": 13, "type": "table", "title": "Project Progress",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 9 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "fieldConfig": { "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Progress %" }, "properties": [{ "id": "custom.displayMode", "value": "basic" }, { "id": "color", "value": { "mode": "continuous-BlYlRd" } }, { "id": "min", "value": 0 }, { "id": "max", "value": 100 }] }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Progress %", "desc": true }] },
+      "targets": [{ "refId": "A", "rawSql": "SELECT p.name AS \"Project\", p.\"dataType\" AS \"Type\", p.status AS \"Status\", p.progress AS \"Progress %\", p.\"totalItems\" AS \"Total Items\", p.\"annotatedItems\" AS \"Annotated\", TO_CHAR(p.\"updatedAt\", 'YYYY-MM-DD') AS \"Updated\" FROM projects p ORDER BY p.progress DESC", "format": "table" }]
+    },
+
+    { "id": 14, "type": "table", "title": "Tenants Overview",
+      "gridPos": { "x": 0, "y": 29, "w": 24, "h": 7 },
+      "datasource": { "type": "postgres", "uid": "annotateme-pg" },
+      "options": { "sortBy": [{ "displayName": "Projects", "desc": true }] },
+      "targets": [{ "refId": "A", "rawSql": "SELECT o.name AS \"Tenant\", COUNT(DISTINCT p.id) AS \"Projects\", COUNT(DISTINCT t.id) AS \"Tasks\", COUNT(DISTINCT j.id) AS \"Jobs\", COUNT(DISTINCT uo.\"usersId\") AS \"Members\", SUM(CASE WHEN j.state = 'completed' THEN 1 ELSE 0 END) AS \"Completed Jobs\" FROM organizations o LEFT JOIN projects p ON p.\"organizationId\" = o.id LEFT JOIN tasks t ON t.\"projectId\" = p.id LEFT JOIN jobs j ON j.\"taskId\" = t.id LEFT JOIN user_organizations uo ON uo.\"organizationsId\" = o.id GROUP BY o.id, o.name ORDER BY \"Projects\" DESC", "format": "table" }]
+    }
+
+  ]
+}
