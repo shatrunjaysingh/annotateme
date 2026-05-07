@@ -18,8 +18,8 @@ export class Project {
   @Column({ nullable: true })
   description: string;
 
-  @Column({ default: "active", type: "enum", enum: ["active", "archived", "completed"] })
-  status: "active" | "archived" | "completed";
+  @Column({ default: "in_progress" })
+  status: string;
 
   @Column({ default: "image", type: "enum", enum: ["image", "text", "audio", "video"] })
   dataType: "image" | "text" | "audio" | "video";
