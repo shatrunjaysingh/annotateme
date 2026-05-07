@@ -301,40 +301,39 @@ export default function Projects() {
                   <input ref={el => importRefs.current[p.id] = el} type="file" accept=".json" style={{ display: 'none' }}
                     onChange={e => handleImportFile(p.id, e.target.files)} />
 
-                  {/* Thumbnail */}
-                  <div style={{ height: 120, background: thumbnailColors[i % thumbnailColors.length], display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden', borderRadius: '10px 10px 0 0' }}>
+                  {/* Thumbnail — overflow:hidden only on the image area, not the menu */}
+                  <div style={{ height: 120, background: thumbnailColors[i % thumbnailColors.length], display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: '10px 10px 0 0', position: 'relative' }}>
                     {p.tasks?.[0]?.thumbnailUrl ? (
                       <img src={p.tasks[0].thumbnailUrl} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     ) : (
                       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                     )}
-
-                    {/* Status badge */}
-                    <span style={{ position: 'absolute', top: 8, left: 8, padding: '2px 8px', borderRadius: 10, background: statusCfg.bg, color: statusCfg.color, fontSize: 11, fontWeight: 600, backdropFilter: 'blur(4px)' }}>
+                    {/* Status badge — inside thumbnail, safe from clipping at this position */}
+                    <span style={{ position: 'absolute', top: 8, left: 8, padding: '2px 8px', borderRadius: 10, background: statusCfg.bg, color: statusCfg.color, fontSize: 11, fontWeight: 600 }}>
                       {statusCfg.label}
                     </span>
+                  </div>
 
-                    {/* ⋮ menu */}
-                    <div style={{ position: 'absolute', top: 8, right: 8 }} onClick={e => e.stopPropagation()}>
-                      <button style={{ width: 28, height: 28, borderRadius: 4, border: 'none', background: 'rgba(0,0,0,0.45)', color: '#fff', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                        onClick={() => setOpenMenuId(openMenuId === p.id ? null : p.id)}>⋮</button>
+                  {/* ⋮ menu — outside overflow:hidden thumbnail, anchored to card corner */}
+                  <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 10 }} onClick={e => e.stopPropagation()}>
+                    <button style={{ width: 28, height: 28, borderRadius: 4, border: 'none', background: 'rgba(0,0,0,0.45)', color: '#fff', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      onClick={() => setOpenMenuId(openMenuId === p.id ? null : p.id)}>⋮</button>
 
-                      {openMenuId === p.id && (
-                        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #e8e8e8', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', minWidth: 190, zIndex: 300, overflow: 'visible' }}>
-                          <MenuItem icon="↗" label="Open" onClick={() => { navigate(`/projects/${p.id}`); setOpenMenuId(null); }} />
-                          <Divider />
-                          <SubMenuItem label="Set status" items={Object.entries(STATUS_CONFIG).map(([val, cfg]) => ({ label: cfg.label, color: cfg.color, active: (p.status || 'in_progress') === val, onClick: () => handleChangeStatus(p.id, val) }))} />
-                          <Divider />
-                          <MenuItem icon="↓" label="Export dataset" onClick={() => handleExportDataset(p.id, p.name)} />
-                          <MenuItem icon="↑" label="Import dataset" onClick={() => handleImportDataset(p.id)} />
-                          <MenuItem icon="⊙" label="Backup project" onClick={() => handleBackup(p.id, p.name)} />
-                          <Divider />
-                          <MenuItem icon="📊" label="View report" onClick={() => { navigate('/reports'); setOpenMenuId(null); }} />
-                          <Divider />
-                          <MenuItem icon="🗑" label="Delete" onClick={() => handleDelete(p.id)} danger />
-                        </div>
-                      )}
-                    </div>
+                    {openMenuId === p.id && (
+                      <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #e8e8e8', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', minWidth: 190, zIndex: 1000 }}>
+                        <MenuItem icon="↗" label="Open" onClick={() => { navigate(`/projects/${p.id}`); setOpenMenuId(null); }} />
+                        <Divider />
+                        <SubMenuItem label="Set status" items={Object.entries(STATUS_CONFIG).map(([val, cfg]) => ({ label: cfg.label, color: cfg.color, active: (p.status || 'in_progress') === val, onClick: () => handleChangeStatus(p.id, val) }))} />
+                        <Divider />
+                        <MenuItem icon="↓" label="Export dataset" onClick={() => handleExportDataset(p.id, p.name)} />
+                        <MenuItem icon="↑" label="Import dataset" onClick={() => handleImportDataset(p.id)} />
+                        <MenuItem icon="⊙" label="Backup project" onClick={() => handleBackup(p.id, p.name)} />
+                        <Divider />
+                        <MenuItem icon="📊" label="View report" onClick={() => { navigate('/reports'); setOpenMenuId(null); }} />
+                        <Divider />
+                        <MenuItem icon="🗑" label="Delete" onClick={() => handleDelete(p.id)} danger />
+                      </div>
+                    )}
                   </div>
 
                   {/* Info */}
