@@ -293,7 +293,7 @@ export default function Projects() {
               const statusCfg = STATUS_CONFIG[p.status || 'in_progress'] || STATUS_CONFIG.in_progress;
               return (
                 <div key={p.id} className="card project-menu"
-                  style={{ cursor: 'pointer', transition: 'box-shadow 0.2s, transform 0.15s', position: 'relative' }}
+                  style={{ cursor: 'pointer', transition: 'box-shadow 0.2s, transform 0.15s', position: 'relative', zIndex: openMenuId === p.id ? 500 : 1 }}
                   onClick={() => navigate(`/projects/${p.id}`)}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 16px rgba(0,0,0,0.14)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = ''; (e.currentTarget as HTMLElement).style.transform = ''; }}>
@@ -451,7 +451,7 @@ function SubMenuItem({ label, items }: { label: string; items: { label: string; 
         <span style={{ fontSize: 10, color: '#8c8c8c' }}>▶</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', left: '100%', top: 0, background: '#fff', border: '1px solid #e8e8e8', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', minWidth: 160, zIndex: 500, overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', right: '100%', top: 0, marginRight: 4, background: '#fff', border: '1px solid #e8e8e8', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', minWidth: 160, zIndex: 1100, overflow: 'hidden' }}>
           {items.map(item => (
             <button key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', border: 'none', background: item.active ? '#f0f7ff' : 'transparent', cursor: 'pointer', fontSize: 13, color: item.active ? '#1890ff' : '#262626' }}
               onMouseEnter={e => { if (!item.active) e.currentTarget.style.background = '#f5f5f5'; }}
