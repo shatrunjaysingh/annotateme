@@ -88,7 +88,8 @@ router.post("/forgot-password", async (req, res) => {
     user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
     await userRepository.save(user);
 
-    const appUrl = process.env.APP_URL || "http://localhost:4200";
+    const domain = process.env.APP_DOMAIN;
+    const appUrl = domain ? `https://${domain}` : (process.env.APP_URL || "http://localhost:4200");
     const resetUrl = `${appUrl}/reset-password?token=${token}`;
 
     if (process.env.SMTP_HOST) {

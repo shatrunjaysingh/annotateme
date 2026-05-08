@@ -80,6 +80,8 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_BUCKET: annotateme
       UPLOAD_DIR: /app/uploads
+      APP_DOMAIN: ${APP_DOMAIN:-}
+      ALLOWED_ORIGINS: ${APP_DOMAIN:+https://${APP_DOMAIN}}${ALLOWED_ORIGINS:-http://localhost:4200}
     ports:
       - "3000:3000"
     depends_on:
@@ -117,7 +119,8 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_SECURITY_ALLOW_EMBEDDING: "true"
-      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      GF_SERVER_DOMAIN: ${APP_DOMAIN:-localhost}
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       DB_USER: ${DB_USER:-annotateme}
       DB_PASSWORD: ${DB_PASSWORD:-annotateme}
@@ -140,6 +143,9 @@ services:
     container_name: annotateme_nginx
     ports:
       - "80:80"
+    environment:
+      # _ = catch-all (works for localhost). Set APP_DOMAIN to your domain for production.
+      NGINX_SERVER_NAME: ${APP_DOMAIN:-_}
     volumes:
       - uploads_data:/app/uploads:ro
     depends_on:
