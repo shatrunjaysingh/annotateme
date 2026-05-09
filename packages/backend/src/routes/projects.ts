@@ -150,10 +150,26 @@ router.delete("/:id", async (req: AuthRequest, res) => {
       return res.status(404).json({ error: "Project not found" });
     }
 
+    const db = AppDataSource;
+    const pid = req.params.id;
+
+    // Must delete in FK dependency order before removing the project row.
+    // Tasks cascade on delete, but the direct project→* links do not.
+    await db.query(`DELETE FROM annotation_labels WHERE "annotationId" IN (SELECT id FROM annotations WHERE "projectId" = $1)`, [pid]);
+    await db.query(`DELETE FROM annotations WHERE "projectId" = $1`, [pid]);
+    await db.query(`DELETE FROM collaborations WHERE "projectId" = $1`, [pid]);
+    await db.query(`DELETE FROM analytics WHERE "projectId" = $1`, [pid]);
+    await db.query(`DELETE FROM labels WHERE "projectId" = $1`, [pid]);
+    // Files linked directly to project (not via task) — task-linked files removed via task CASCADE
+    await db.query(`DELETE FROM files WHERE "projectId" = $1 AND "taskId" IS NULL`, [pid]);
+    // Tasks (and their jobs/files) cascade from the project FK
+    await db.query(`DELETE FROM tasks WHERE "projectId" = $1`, [pid]);
+
     await projectRepository.remove(project);
     res.status(204).send();
-  } catch (error) {
-    res.status(500).json({ error: "Failed to delete project" });
+  } catch (error: any) {
+    console.error("Project delete error:", error);
+    res.status(500).json({ error: error.message || "Failed to delete project" });
   }
 });
 
