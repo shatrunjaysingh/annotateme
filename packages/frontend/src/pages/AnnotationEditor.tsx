@@ -652,15 +652,15 @@ export default function AnnotationEditor() {
                 {pcTool === 'cuboid' && <span style={{ position: 'absolute', left: 2, top: '50%', transform: 'translateY(-50%)', width: 3, height: 20, background: '#1890ff', borderRadius: 2 }} />}
               </button>
               <div style={{ width: 28, height: 1, background: '#f0f0f0', margin: '4px 0' }} />
-              {/* Cuboid nudge keys — active when a cuboid is selected */}
-              <div title="Nudge selected cuboid (hold Shift for ×5 step)" style={{ display: 'flex', flexDirection: 'column', gap: 1, opacity: selectedCuboidId ? 1 : 0.35 }}>
+              {/* Cuboid nudge keys */}
+              <div title="Nudge selected cuboid&#10;U/J = up/down&#10;I/K = fwd/back&#10;O/L = right/left&#10;Hold Shift for ×5 step" style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {([
-                  [{ k: 'U', label: '↑ Up'    }, { k: 'I', label: '⬆ Fwd'  }, { k: 'O', label: '→ Right' }],
-                  [{ k: 'J', label: '↓ Dn'    }, { k: 'K', label: '⬇ Back' }, { k: 'L', label: '← Left'  }],
+                  [{ k: 'U', label: 'Up'      }, { k: 'I', label: 'Forward'  }, { k: 'O', label: 'Right' }],
+                  [{ k: 'J', label: 'Down'    }, { k: 'K', label: 'Backward' }, { k: 'L', label: 'Left'  }],
                 ] as { k: string; label: string }[][]).map((row, ri) => (
                   <div key={ri} style={{ display: 'flex', gap: 1 }}>
                     {row.map(({ k, label }) => (
-                      <kbd key={k} title={label} style={{ width: 14, height: 14, background: selectedCuboidId ? '#d6e4ff' : '#e8e8e8', borderRadius: 2, fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', color: selectedCuboidId ? '#1890ff' : '#595959', fontFamily: 'monospace', cursor: 'default', border: selectedCuboidId ? '1px solid #91caff' : '1px solid transparent' }}>{k}</kbd>
+                      <kbd key={k} title={label} style={{ width: 14, height: 14, background: '#e8e8e8', borderRadius: 2, fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#595959', fontFamily: 'monospace', cursor: 'default' }}>{k}</kbd>
                     ))}
                   </div>
                 ))}
