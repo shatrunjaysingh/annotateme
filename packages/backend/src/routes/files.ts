@@ -13,6 +13,20 @@ import { extractFrames } from "../services/video-extractor";
 const router = Router();
 router.use(authMiddleware);
 
+// Resolve MIME from extension when browser sends application/octet-stream
+const MIME_MAP: Record<string, string> = {
+  mp4: 'video/mp4', mov: 'video/quicktime', avi: 'video/x-msvideo',
+  mkv: 'video/x-matroska', webm: 'video/webm',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp',
+  pcd: 'application/octet-stream',
+};
+function resolveMime(originalName: string, provided: string): string {
+  if (provided && provided !== 'application/octet-stream') return provided;
+  const ext = originalName.split('.').pop()?.toLowerCase() ?? '';
+  return MIME_MAP[ext] ?? provided ?? 'application/octet-stream';
+}
+
 const fileRepo = AppDataSource.getRepository(FileEntity);
 const taskRepo = AppDataSource.getRepository(Task);
 const jobRepo  = AppDataSource.getRepository(Job);
@@ -53,7 +67,7 @@ router.post("/upload", upload.array("files", 500), async (req: AuthRequest, res)
       const record = fileRepo.create({
         originalName: f.originalname,
         fileName: f.filename,
-        mimeType: f.mimetype || "application/octet-stream",
+        mimeType: resolveMime(f.originalname, f.mimetype),
         size: f.size,
         path: f.path,
         url: `/uploads/${f.filename}`,
@@ -128,7 +142,16 @@ router.get("/task/:taskId", async (req: AuthRequest, res) => {
       where: { taskId: req.params.taskId },
       order: { frameNumber: "ASC" },
     });
-    res.json(files);
+    // Exclude source video files — only serve annotatable frames (images + PCD)
+    const VIDEO_EXT = /\.(mp4|avi|mov|mkv|webm)$/i;
+    const annotatable = files.filter(f => {
+      const mime = f.mimeType ?? '';
+      const name = f.originalName ?? f.fileName ?? '';
+      if (mime.startsWith('video/')) return false;
+      if (VIDEO_EXT.test(name)) return false;
+      return true;
+    });
+    res.json(annotatable);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch files" });
   }
@@ -162,10 +185,16 @@ router.post("/:id/extract-frames", async (req: AuthRequest, res) => {
 
     const { frames, durationSec } = await extractFrames(file.path, frameDir, fps);
 
-    // Count existing frames for this task so new ones are appended
-    const existingCount = file.taskId
-      ? await fileRepo.count({ where: { taskId: file.taskId } })
-      : 0;
+    // Count only annotatable (non-video) files already in the task so frames start at the right number
+    const VIDEO_EXT = /\.(mp4|avi|mov|mkv|webm)$/i;
+    const allTaskFiles = file.taskId
+      ? await fileRepo.find({ where: { taskId: file.taskId } })
+      : [];
+    const existingCount = allTaskFiles.filter(f => {
+      const mime = f.mimeType ?? '';
+      const name = f.originalName ?? f.fileName ?? '';
+      return !mime.startsWith('video/') && !VIDEO_EXT.test(name);
+    }).length;
 
     const saved: FileEntity[] = [];
     for (let i = 0; i < frames.length; i++) {
@@ -194,9 +223,11 @@ router.post("/:id/extract-frames", async (req: AuthRequest, res) => {
         if (!task.thumbnailUrl && saved[0]?.url) task.thumbnailUrl = saved[0].url;
         await taskRepo.save(task);
 
+        // Keep job frame range in sync
         const jobs = await jobRepo.find({ where: { taskId: file.taskId } });
         if (jobs.length > 0) {
-          jobs[0].frameEnd = task.frameCount - 1;
+          jobs[0].frameStart = 0;
+          jobs[0].frameEnd   = task.frameCount - 1;
           await jobRepo.save(jobs[0]);
         }
       }
