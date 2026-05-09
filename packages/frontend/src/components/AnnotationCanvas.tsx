@@ -62,6 +62,59 @@ function hitTest(shape: Shape, p: Point, thresh: number, hiddenLabels: Set<strin
   }
 }
 
+// Returns handle positions for a shape (in image coords), order matching applyVertexMove indices.
+function getShapeHandles(shape: Shape): Point[] {
+  if (shape.type === 'rect' && shape.points.length >= 2) {
+    const [p0, p1] = shape.points;
+    const minX = Math.min(p0.x, p1.x), maxX = Math.max(p0.x, p1.x);
+    const minY = Math.min(p0.y, p1.y), maxY = Math.max(p0.y, p1.y);
+    return [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }];
+  }
+  if (shape.type === 'ellipse' && shape.points.length >= 2) {
+    const [c, r] = shape.points;
+    return [
+      { x: c.x, y: c.y },
+      { x: c.x, y: c.y - Math.abs(r.y) },
+      { x: c.x, y: c.y + Math.abs(r.y) },
+      { x: c.x - Math.abs(r.x), y: c.y },
+      { x: c.x + Math.abs(r.x), y: c.y },
+    ];
+  }
+  return shape.points;
+}
+
+function hitHandle(handles: Point[], imgPt: Point, thresh: number): number {
+  for (let i = 0; i < handles.length; i++) {
+    if (Math.hypot(imgPt.x - handles[i].x, imgPt.y - handles[i].y) < thresh) return i;
+  }
+  return -1;
+}
+
+// Move a single vertex/handle and return new points array.
+function applyVertexMove(shape: Shape, handleIdx: number, newPt: Point): Point[] {
+  const pts = shape.points.map(p => ({ ...p }));
+  if (shape.type === 'rect' && pts.length >= 2) {
+    const [p0, p1] = pts;
+    const minXIdx = p0.x <= p1.x ? 0 : 1, maxXIdx = 1 - minXIdx;
+    const minYIdx = p0.y <= p1.y ? 0 : 1, maxYIdx = 1 - minYIdx;
+    if (handleIdx === 0) { pts[minXIdx].x = newPt.x; pts[minYIdx].y = newPt.y; }
+    else if (handleIdx === 1) { pts[maxXIdx].x = newPt.x; pts[minYIdx].y = newPt.y; }
+    else if (handleIdx === 2) { pts[maxXIdx].x = newPt.x; pts[maxYIdx].y = newPt.y; }
+    else if (handleIdx === 3) { pts[minXIdx].x = newPt.x; pts[maxYIdx].y = newPt.y; }
+  } else if (shape.type === 'ellipse' && pts.length >= 2) {
+    const c = pts[0], r = pts[1];
+    if (handleIdx === 0) { c.x = newPt.x; c.y = newPt.y; }
+    else if (handleIdx === 1) { r.y = Math.max(2, c.y - newPt.y); }
+    else if (handleIdx === 2) { r.y = Math.max(2, newPt.y - c.y); }
+    else if (handleIdx === 3) { r.x = Math.max(2, c.x - newPt.x); }
+    else if (handleIdx === 4) { r.x = Math.max(2, newPt.x - c.x); }
+  } else if (handleIdx < pts.length) {
+    pts[handleIdx].x = newPt.x;
+    pts[handleIdx].y = newPt.y;
+  }
+  return pts;
+}
+
 interface Props {
   imageUrl: string | null;
   jobId: string;
@@ -80,7 +133,7 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
   const imgRef = useRef<HTMLImageElement | null>(null);
   const transformRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 });
   const drawingRef = useRef<{ active: boolean; pts: Point[]; startX: number; startY: number }>({ active: false, pts: [], startX: 0, startY: 0 });
-  const dragRef = useRef<{ shapeId: string | null; startImg: Point; startPts: Point[] }>({ shapeId: null, startImg: { x: 0, y: 0 }, startPts: [] });
+  const dragRef = useRef<{ shapeId: string | null; startImg: Point; startPts: Point[]; vertexIdx: number }>({ shapeId: null, startImg: { x: 0, y: 0 }, startPts: [], vertexIdx: -1 });
   const isPanning = useRef(false);
   const lastPan = useRef({ x: 0, y: 0 });
   const [zoomLevel, setZoomLevel] = useState(100);
@@ -234,6 +287,13 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
         if (isSelected) ctx.setLineDash([6 / scale, 3 / scale]);
         ctx.stroke();
         ctx.setLineDash([]);
+        if (isSelected) {
+          getShapeHandles(shape).forEach(h => {
+            ctx.beginPath(); ctx.arc(h.x, h.y, HANDLE_SIZE / scale, 0, Math.PI * 2);
+            ctx.fillStyle = '#fff'; ctx.fill();
+            ctx.strokeStyle = color; ctx.lineWidth = 1.5 / scale; ctx.stroke();
+          });
+        }
         ctx.fillStyle = color;
         ctx.font = `${12 / scale}px -apple-system, sans-serif`;
         ctx.fillText(shape.label, c.x - Math.abs(r.x), c.y - Math.abs(r.y) - 4 / scale);
@@ -341,8 +401,23 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
     if (e.button !== 0) return;
 
     if (currentTool === 'select') {
-      // Find topmost hit shape (reverse order)
       const thresh = 8 / transformRef.current.scale;
+
+      // Check vertex handles on the currently selected shape first
+      if (selectedShapeId) {
+        const selShape = shapes.find(s => s.id === selectedShapeId);
+        if (selShape) {
+          const handles = getShapeHandles(selShape);
+          const vi = hitHandle(handles, imgPt, thresh * 1.5);
+          if (vi >= 0) {
+            dragRef.current = { shapeId: selectedShapeId, startImg: imgPt, startPts: selShape.points.map(p => ({ ...p })), vertexIdx: vi };
+            draw();
+            return;
+          }
+        }
+      }
+
+      // Otherwise pick topmost shape for whole-shape drag
       let hit: string | null = null;
       for (let i = shapes.length - 1; i >= 0; i--) {
         if (hitTest(shapes[i], imgPt, thresh, hiddenLabels)) { hit = shapes[i].id; break; }
@@ -350,7 +425,7 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
       selectShape(hit);
       if (hit) {
         const sh = shapes.find(s => s.id === hit)!;
-        dragRef.current = { shapeId: hit, startImg: imgPt, startPts: sh.points.map(p => ({ ...p })) };
+        dragRef.current = { shapeId: hit, startImg: imgPt, startPts: sh.points.map(p => ({ ...p })), vertexIdx: -1 };
       }
       draw();
       return;
@@ -398,13 +473,34 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
       return;
     }
 
-    // Dragging selected shape
+    // Dragging selected shape or vertex
     if (currentTool === 'select' && dragRef.current.shapeId && e.buttons === 1) {
-      const dx = imgPt.x - dragRef.current.startImg.x;
-      const dy = imgPt.y - dragRef.current.startImg.y;
-      const newPts = dragRef.current.startPts.map(p => ({ x: p.x + dx, y: p.y + dy }));
-      updateShape(dragRef.current.shapeId, { points: newPts });
+      if (dragRef.current.vertexIdx >= 0) {
+        const sh = shapes.find(s => s.id === dragRef.current.shapeId);
+        if (sh) updateShape(dragRef.current.shapeId, { points: applyVertexMove(sh, dragRef.current.vertexIdx, imgPt) });
+      } else {
+        const dx = imgPt.x - dragRef.current.startImg.x;
+        const dy = imgPt.y - dragRef.current.startImg.y;
+        updateShape(dragRef.current.shapeId, { points: dragRef.current.startPts.map(p => ({ x: p.x + dx, y: p.y + dy })) });
+      }
       return;
+    }
+
+    // Cursor feedback in select mode (when not dragging)
+    if (currentTool === 'select' && !dragRef.current.shapeId) {
+      const canvas = canvasRef.current!;
+      const thresh = 8 / transformRef.current.scale;
+      if (selectedShapeId) {
+        const selShape = shapes.find(s => s.id === selectedShapeId);
+        if (selShape && hitHandle(getShapeHandles(selShape), imgPt, thresh * 1.5) >= 0) {
+          canvas.style.cursor = 'crosshair'; return;
+        }
+      }
+      let overShape = false;
+      for (let i = shapes.length - 1; i >= 0; i--) {
+        if (hitTest(shapes[i], imgPt, thresh, hiddenLabels)) { overShape = true; break; }
+      }
+      canvas.style.cursor = overShape ? 'move' : '';
     }
 
     // Update in-progress drawing preview

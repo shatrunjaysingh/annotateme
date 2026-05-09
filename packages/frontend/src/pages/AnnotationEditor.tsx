@@ -95,7 +95,7 @@ export default function AnnotationEditor() {
 
   const {
     currentTool, setTool, setLabel, selectedLabel, selectedLabelColor,
-    shapes, setShapes, deleteShape, selectShape, selectedShapeId,
+    shapes, setShapes, updateShape, deleteShape, selectShape, selectedShapeId,
     toggleHidden, toggleLocked, undo, redo, clearShapes,
   } = useAnnotationStore();
 
@@ -895,10 +895,17 @@ export default function AnnotationEditor() {
                 {labels.map((lbl) => (
                   <div key={lbl.name}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, marginBottom: 2, cursor: 'pointer', background: selectedLabel === lbl.name ? '#e6f4ff' : 'transparent', border: `1px solid ${selectedLabel === lbl.name ? '#91caff' : 'transparent'}`, transition: 'all 0.1s' }}
-                    onClick={() => setLabel(lbl.name, lbl.color)}>
+                    onClick={() => {
+                      if (selectedShapeId) {
+                        updateShape(selectedShapeId, { label: lbl.name, color: lbl.color });
+                      }
+                      setLabel(lbl.name, lbl.color);
+                    }}>
                     <div style={{ width: 12, height: 12, borderRadius: 3, background: lbl.color, flexShrink: 0 }} />
                     <span style={{ flex: 1, fontSize: 13, fontWeight: selectedLabel === lbl.name ? 600 : 400, color: selectedLabel === lbl.name ? '#1890ff' : '#262626' }}>{lbl.name}</span>
-                    {selectedLabel === lbl.name && <span style={{ fontSize: 10, color: '#1890ff' }}>active</span>}
+                    {selectedShapeId && selectedShapeId && shapes.find(s => s.id === selectedShapeId)?.label === lbl.name
+                      ? <span style={{ fontSize: 10, color: '#722ed1' }}>selected</span>
+                      : selectedLabel === lbl.name && !selectedShapeId && <span style={{ fontSize: 10, color: '#1890ff' }}>active</span>}
                   </div>
                 ))}
                 {showAddLabel ? (
