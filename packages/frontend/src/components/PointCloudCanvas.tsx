@@ -126,6 +126,7 @@ export default function PointCloudCanvas({
   const controlsRef   = useRef<OrbitControls | null>(null);
   const pointsObjRef  = useRef<THREE.Points | null>(null);
   const cuboidsGrpRef = useRef(new THREE.Group());
+  const gridRef        = useRef<THREE.GridHelper | null>(null);
 
   // Drawing a new cuboid via drag
   const drawRef = useRef<{
@@ -156,9 +157,10 @@ export default function PointCloudCanvas({
 
     const scene = sceneRef.current;
 
-    // Grid (XZ plane)
-    const grid = new THREE.GridHelper(60, 30, 0x333333, 0x2a2a2a);
+    // Grid (XZ plane) — repositioned to data floor when real data loads
+    const grid = new THREE.GridHelper(200, 50, 0x333333, 0x2a2a2a);
     scene.add(grid);
+    gridRef.current = grid;
 
     // Axes helper (tiny)
     const axes = new THREE.AxesHelper(3);
@@ -210,7 +212,7 @@ export default function PointCloudCanvas({
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-    const mat = new THREE.PointsMaterial({ size: 0.12, vertexColors: true, sizeAttenuation: true });
+    const mat = new THREE.PointsMaterial({ size: 2, vertexColors: true, sizeAttenuation: false });
     const pts = new THREE.Points(geo, mat);
     scene.add(pts);
     pointsObjRef.current = pts;
@@ -288,6 +290,11 @@ export default function PointCloudCanvas({
       (topCam.current   as any)._orthoSize = hRadius * 1.1;
       (sideCam.current  as any)._orthoSize = Math.max(size.x, size.y) * 0.65;
       (frontCam.current as any)._orthoSize = Math.max(size.z, size.y) * 0.65;
+
+      // Snap grid to data floor level
+      if (gridRef.current) {
+        gridRef.current.position.y = geo.boundingBox.min.y;
+      }
     }
   }, [points, pointColors]);
 
