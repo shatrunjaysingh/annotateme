@@ -73,6 +73,9 @@ export default function AnnotationEditor() {
   const [selectedCuboidId, setSelectedCuboidId] = useState<string | null>(null);
   const [expandedView, setExpandedView] = useState<'top' | 'side' | 'front' | null>(null);
   const [pcTool, setPcTool] = useState<'select' | 'cuboid'>('select');
+  const [pcdPoints, setPcdPoints] = useState<Float32Array | undefined>(undefined);
+  const [pcdColors, setPcdColors] = useState<Float32Array | undefined>(undefined);
+  const [pcdLoading, setPcdLoading] = useState(false);
 
   // Label creation
   const [showAddLabel, setShowAddLabel] = useState(false);
@@ -127,6 +130,33 @@ export default function AnnotationEditor() {
     };
     load();
   }, [jobId, frameNum, setShapes, clearShapes]);
+
+  // Load PCD point cloud for current frame when in 3D mode
+  useEffect(() => {
+    if (viewMode !== '3d') return;
+    const f = files[frameNum];
+    if (!f) return;
+    const isPCD = f.originalName?.toLowerCase().endsWith('.pcd') || f.url?.toLowerCase().endsWith('.pcd');
+    if (!isPCD) return;
+
+    setPcdPoints(undefined);
+    setPcdColors(undefined);
+    setPcdLoading(true);
+
+    client.get(`/files/${f.id}/points`)
+      .then(({ data }) => {
+        const decode = (b64: string): Float32Array => {
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          return new Float32Array(bytes.buffer);
+        };
+        setPcdPoints(decode(data.points));
+        setPcdColors(decode(data.colors));
+      })
+      .catch(() => { /* fallback to demo cloud */ })
+      .finally(() => setPcdLoading(false));
+  }, [viewMode, files, frameNum]);
 
   // Auto-save
   const saveAnnotations = useCallback(async (silent = false) => {
@@ -602,7 +632,7 @@ export default function AnnotationEditor() {
           <label title="Upload images to this task" style={{ width: 36, height: 36, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#595959', transition: 'all 0.15s' }}
             onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
             onMouseLeave={e => (e.currentTarget.style.background = '')}>
-            <input ref={uploadRef} type="file" multiple accept="image/*" style={{ display: 'none' }} onChange={async (e) => {
+            <input ref={uploadRef} type="file" multiple accept={viewMode === '3d' ? '.pcd' : 'image/*'} style={{ display: 'none' }} onChange={async (e) => {
               if (!e.target.files || !job?.task?.id) return;
               const formData = new FormData();
               formData.append('taskId', job.task.id);
@@ -625,21 +655,30 @@ export default function AnnotationEditor() {
         {/* CANVAS AREA */}
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
           {viewMode === '3d' ? (
-            <PointCloudCanvas
-              cuboids={cuboids}
-              labels={labels}
-              currentTool={pcTool}
-              selectedLabel={selectedLabel}
-              selectedLabelColor={selectedLabelColor}
-              colorBy={colorBy}
-              selectedCuboidId={selectedCuboidId}
-              cuboidOrientation={cuboidOrientation}
-              onAddCuboid={c => setCuboids(prev => [...prev, c])}
-              onSelectCuboid={setSelectedCuboidId}
-              subViewHeight={200}
-              expandedView={expandedView}
-              onExpandView={setExpandedView}
-            />
+            <>
+              {pcdLoading && (
+                <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 20, background: 'rgba(0,0,0,0.65)', color: '#fff', borderRadius: 8, padding: '6px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}>
+                  <span className="spinner" style={{ width: 14, height: 14 }} /> Loading point cloud…
+                </div>
+              )}
+              <PointCloudCanvas
+                points={pcdPoints}
+                pointColors={pcdColors}
+                cuboids={cuboids}
+                labels={labels}
+                currentTool={pcTool}
+                selectedLabel={selectedLabel}
+                selectedLabelColor={selectedLabelColor}
+                colorBy={colorBy}
+                selectedCuboidId={selectedCuboidId}
+                cuboidOrientation={cuboidOrientation}
+                onAddCuboid={c => setCuboids(prev => [...prev, c])}
+                onSelectCuboid={setSelectedCuboidId}
+                subViewHeight={200}
+                expandedView={expandedView}
+                onExpandView={setExpandedView}
+              />
+            </>
           ) : (
             <AnnotationCanvas
               imageUrl={imageUrl}

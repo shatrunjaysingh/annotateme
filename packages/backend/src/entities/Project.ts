@@ -21,8 +21,8 @@ export class Project {
   @Column({ default: "in_progress" })
   status: string;
 
-  @Column({ default: "image", type: "enum", enum: ["image", "text", "audio", "video"] })
-  dataType: "image" | "text" | "audio" | "video";
+  @Column({ default: "image" })
+  dataType: string;
 
   @Column({ type: "json", default: () => "'[]'" })
   labelSet: string[];
