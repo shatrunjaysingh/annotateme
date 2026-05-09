@@ -145,7 +145,7 @@ function applyColor(
     const n   = normalizeIntensity(raw, h.types[ii], h.sizes[ii]);
     col[i*3] = col[i*3+1] = col[i*3+2] = n;
   } else {
-    heightColor(pts[i*3+1], col, i*3);
+    heightColor(pts[i*3+2], col, i*3); // PCD z is actual height
   }
 }
 
@@ -184,7 +184,7 @@ export function parsePCD(buffer: Buffer): ParsedPointCloud {
         const n = normalizeIntensity(v[ii] ?? 0, h.types[ii], h.sizes[ii]);
         col[i*3] = col[i*3+1] = col[i*3+2] = n;
       } else {
-        heightColor(pts[i*3+1], col, i*3);
+        heightColor(pts[i*3+2], col, i*3); // PCD z is actual height
       }
     }
     return { points: pts, colors: col, count };

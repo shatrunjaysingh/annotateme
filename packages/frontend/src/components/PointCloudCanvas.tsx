@@ -235,41 +235,59 @@ export default function PointCloudCanvas({
   useEffect(() => {
     if (!points || !pointsObjRef.current) return;
     const geo = pointsObjRef.current.geometry as THREE.BufferGeometry;
-    geo.setAttribute('position', new THREE.BufferAttribute(points, 3));
+
+    // PCD files use Z-up (x=forward, y=left, z=up).
+    // Three.js uses Y-up, so we remap: Three.js(x,y,z) = PCD(x,z,y)
+    const n = points.length / 3;
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      pos[i*3]   = points[i*3];    // PCD x → Three.js x
+      pos[i*3+1] = points[i*3+2]; // PCD z → Three.js y (up)
+      pos[i*3+2] = points[i*3+1]; // PCD y → Three.js z
+    }
+
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.computeBoundingBox();
     if (pointColors && pointColors.length === points.length) {
       geo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
     }
     geo.attributes.position.needsUpdate = true;
 
-    // Auto-fit cameras to bounding box of real data
+    // Auto-fit cameras to the axis-aligned bounding box
     if (geo.boundingBox) {
       const center = new THREE.Vector3();
       const size   = new THREE.Vector3();
       geo.boundingBox.getCenter(center);
       geo.boundingBox.getSize(size);
-      const radius = Math.max(size.x, size.y, size.z) * 0.75;
 
-      perspCam.current.position.set(center.x + radius, center.y + radius * 0.6, center.z + radius);
-      perspCam.current.lookAt(center);
+      // Horizontal extent (XZ ground plane), vertical extent (Y)
+      const hRadius = Math.max(size.x, size.z) * 0.65;
+      const camY    = center.y + Math.max(size.y * 4, hRadius * 0.5);
+
+      perspCam.current.position.set(center.x + hRadius, camY, center.z + hRadius);
       if (controlsRef.current) {
         controlsRef.current.target.copy(center);
         controlsRef.current.update();
       }
 
-      topCam.current.position.set(center.x, center.y + 200, center.z);
+      // Top (bird's-eye): camera directly above, -Z is "up" on screen
+      topCam.current.position.set(center.x, center.y + 500, center.z);
       topCam.current.up.set(0, 0, -1);
       topCam.current.lookAt(center.x, center.y, center.z);
 
-      sideCam.current.position.set(center.x + 200, center.y, center.z);
+      // Side: look along X axis
+      sideCam.current.position.set(center.x + 500, center.y, center.z);
+      sideCam.current.up.set(0, 1, 0);
       sideCam.current.lookAt(center.x, center.y, center.z);
 
-      frontCam.current.position.set(center.x, center.y, center.z + 200);
+      // Front: look along Z axis
+      frontCam.current.position.set(center.x, center.y, center.z + 500);
+      frontCam.current.up.set(0, 1, 0);
       frontCam.current.lookAt(center.x, center.y, center.z);
 
-      (topCam.current   as any)._orthoSize = radius * 1.2;
-      (sideCam.current  as any)._orthoSize = radius * 1.2;
-      (frontCam.current as any)._orthoSize = radius * 1.2;
+      (topCam.current   as any)._orthoSize = hRadius * 1.1;
+      (sideCam.current  as any)._orthoSize = Math.max(size.x, size.y) * 0.65;
+      (frontCam.current as any)._orthoSize = Math.max(size.z, size.y) * 0.65;
     }
   }, [points, pointColors]);
 
