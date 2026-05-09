@@ -149,6 +149,26 @@ function applyColor(
   }
 }
 
+// ─── Strip NaN / Infinity points (common in ROS LiDAR data for invalid returns) ─
+function compactNaN(pts: Float32Array, col: Float32Array, count: number): ParsedPointCloud {
+  let valid = 0;
+  for (let i = 0; i < count; i++) {
+    if (isFinite(pts[i*3]) && isFinite(pts[i*3+1]) && isFinite(pts[i*3+2])) valid++;
+  }
+  if (valid === count) return { points: pts, colors: col, count };
+
+  const outPts = new Float32Array(valid * 3);
+  const outCol = new Float32Array(valid * 3);
+  let k = 0;
+  for (let i = 0; i < count; i++) {
+    if (!isFinite(pts[i*3]) || !isFinite(pts[i*3+1]) || !isFinite(pts[i*3+2])) continue;
+    outPts[k*3]   = pts[i*3];   outPts[k*3+1] = pts[i*3+1]; outPts[k*3+2] = pts[i*3+2];
+    outCol[k*3]   = col[i*3];   outCol[k*3+1] = col[i*3+1]; outCol[k*3+2] = col[i*3+2];
+    k++;
+  }
+  return { points: outPts, colors: outCol, count: valid };
+}
+
 // ─── Main export ─────────────────────────────────────────────────────────────
 export function parsePCD(buffer: Buffer): ParsedPointCloud {
   const h = parseHeader(buffer);
@@ -184,10 +204,10 @@ export function parsePCD(buffer: Buffer): ParsedPointCloud {
         const n = normalizeIntensity(v[ii] ?? 0, h.types[ii], h.sizes[ii]);
         col[i*3] = col[i*3+1] = col[i*3+2] = n;
       } else {
-        heightColor(pts[i*3+2], col, i*3); // PCD z is actual height
+        heightColor(pts[i*3+2], col, i*3);
       }
     }
-    return { points: pts, colors: col, count };
+    return compactNaN(pts, col, count);
   }
 
   // ── Binary (row-major) ────────────────────────────────────────────────────
@@ -206,16 +226,10 @@ export function parsePCD(buffer: Buffer): ParsedPointCloud {
       pts[i*3+2] = readScalar(data, base + fieldOffset[zi], h.types[zi], h.sizes[zi]);
       applyColor(data, base, h, ii, rgbi, rgbai, fieldOffset, pts, col, i);
     }
-    return { points: pts, colors: col, count };
+    return compactNaN(pts, col, count);
   }
 
-  // ── Binary compressed (LZ4 + column-major layout) ─────────────────────────
-  // Layout after DATA line:
-  //   [compressedSize: uint32 LE]
-  //   [uncompressedSize: uint32 LE]
-  //   [LZ4 block: compressedSize bytes]
-  //
-  // Uncompressed data is column-major (all values of field 0, then field 1…)
+  // ── Binary compressed (column-major LZF layout) ───────────────────────────
   const raw = buffer.slice(h.headerByteLength);
   const compressedSize   = raw.readUInt32LE(0);
   const uncompressedSize = raw.readUInt32LE(4);
@@ -223,7 +237,6 @@ export function parsePCD(buffer: Buffer): ParsedPointCloud {
 
   const decompressed = lzfDecompress(compressed, uncompressedSize);
 
-  // Build column byte-offsets: each field occupies (size × count × numPoints) bytes
   const colFieldOffset: number[] = [];
   let colOff = 0;
   for (let f = 0; f < h.fields.length; f++) {
@@ -238,5 +251,5 @@ export function parsePCD(buffer: Buffer): ParsedPointCloud {
     applyColor(decompressed, 0, h, ii, rgbi, rgbai, colFieldOffset, pts, col, i, true);
   }
 
-  return { points: pts, colors: col, count };
+  return compactNaN(pts, col, count);
 }

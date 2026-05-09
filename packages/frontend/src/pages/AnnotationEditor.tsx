@@ -76,6 +76,7 @@ export default function AnnotationEditor() {
   const [pcdPoints, setPcdPoints] = useState<Float32Array | undefined>(undefined);
   const [pcdColors, setPcdColors] = useState<Float32Array | undefined>(undefined);
   const [pcdLoading, setPcdLoading] = useState(false);
+  const [pcdError, setPcdError] = useState<string | null>(null);
 
   // Label creation
   const [showAddLabel, setShowAddLabel] = useState(false);
@@ -141,6 +142,7 @@ export default function AnnotationEditor() {
 
     setPcdPoints(undefined);
     setPcdColors(undefined);
+    setPcdError(null);
     setPcdLoading(true);
 
     client.get(`/files/${f.id}/points`)
@@ -154,7 +156,7 @@ export default function AnnotationEditor() {
         setPcdPoints(decode(data.points));
         setPcdColors(decode(data.colors));
       })
-      .catch(() => { /* fallback to demo cloud */ })
+      .catch((err) => { setPcdError(err?.response?.data?.error || 'Failed to load point cloud'); })
       .finally(() => setPcdLoading(false));
   }, [viewMode, files, frameNum]);
 
@@ -659,6 +661,12 @@ export default function AnnotationEditor() {
               {pcdLoading && (
                 <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 20, background: 'rgba(0,0,0,0.65)', color: '#fff', borderRadius: 8, padding: '6px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}>
                   <span className="spinner" style={{ width: 14, height: 14 }} /> Loading point cloud…
+                </div>
+              )}
+              {pcdError && !pcdLoading && (
+                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 20, background: 'rgba(220,38,38,0.9)', color: '#fff', borderRadius: 8, padding: '12px 20px', fontSize: 13, textAlign: 'center', maxWidth: 340 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Failed to load point cloud</div>
+                  <div style={{ fontSize: 11, opacity: 0.85 }}>{pcdError}</div>
                 </div>
               )}
               <PointCloudCanvas

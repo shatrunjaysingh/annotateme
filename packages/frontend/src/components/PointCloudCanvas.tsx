@@ -8,14 +8,14 @@ export interface Cuboid3D {
   color: string;
   center: { x: number; y: number; z: number };
   dimensions: { w: number; h: number; d: number };
-  rotation: number; // yaw in radians
+  rotation: number;
   hidden?: boolean;
   locked?: boolean;
 }
 
 interface Props {
-  points?: Float32Array;       // flattened xyz xyz xyz…
-  pointColors?: Float32Array;  // flattened rgb rgb rgb… (0-1)
+  points?: Float32Array;
+  pointColors?: Float32Array;
   cuboids?: Cuboid3D[];
   labels?: { name: string; color: string }[];
   currentTool?: 'select' | 'cuboid';
@@ -32,18 +32,12 @@ interface Props {
 }
 
 function uid() { return Math.random().toString(36).slice(2, 11); }
-
-function hexToThreeColor(hex: string) {
-  return new THREE.Color(hex);
-}
+function hexColor(hex: string) { return new THREE.Color(hex); }
 
 function makeCuboidLines(c: Cuboid3D, selected: boolean): THREE.LineSegments {
   const geo = new THREE.BoxGeometry(c.dimensions.w, c.dimensions.h, c.dimensions.d);
   const edges = new THREE.EdgesGeometry(geo);
-  const mat = new THREE.LineBasicMaterial({
-    color: hexToThreeColor(c.color),
-    linewidth: selected ? 2 : 1,
-  });
+  const mat = new THREE.LineBasicMaterial({ color: hexColor(c.color), linewidth: selected ? 2 : 1 });
   const mesh = new THREE.LineSegments(edges, mat);
   mesh.position.set(c.center.x, c.center.y + c.dimensions.h / 2, c.center.z);
   mesh.rotation.y = c.rotation;
@@ -51,49 +45,38 @@ function makeCuboidLines(c: Cuboid3D, selected: boolean): THREE.LineSegments {
   return mesh;
 }
 
-// Generate a plausible street-scene demo cloud
 function demoCloud(): Float32Array {
-  const count = 60000;
+  const count = 50000;
   const pts = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) {
-    const i3 = i * 3;
     const r = Math.random();
     if (r < 0.65) {
-      // Road / ground plane
-      pts[i3]   = (Math.random() - 0.5) * 50;
-      pts[i3+1] = (Math.random() - 0.05) * 0.15;
-      pts[i3+2] = (Math.random() - 0.5) * 80;
-    } else if (r < 0.80) {
-      // Curb / low structures
+      pts[i*3] = (Math.random()-0.5)*50; pts[i*3+1] = Math.random()*0.15; pts[i*3+2] = (Math.random()-0.5)*80;
+    } else if (r < 0.82) {
       const side = Math.random() < 0.5 ? -1 : 1;
-      pts[i3]   = side * (6 + Math.random() * 2);
-      pts[i3+1] = Math.random() * 0.4;
-      pts[i3+2] = (Math.random() - 0.5) * 60;
-    } else if (r < 0.90) {
-      // Vehicles (boxes)
-      const vx = (Math.random() - 0.5) * 30;
-      const vz = (Math.random() - 0.5) * 50;
-      pts[i3]   = vx + (Math.random() - 0.5) * 2;
-      pts[i3+1] = Math.random() * 1.8;
-      pts[i3+2] = vz + (Math.random() - 0.5) * 4;
+      pts[i*3] = side*(6+Math.random()*2); pts[i*3+1] = Math.random()*0.4; pts[i*3+2] = (Math.random()-0.5)*60;
+    } else if (r < 0.92) {
+      pts[i*3] = (Math.random()-0.5)*30; pts[i*3+1] = Math.random()*1.8; pts[i*3+2] = (Math.random()-0.5)*50;
     } else {
-      // Vegetation / poles
-      pts[i3]   = (Math.random() - 0.5) * 40;
-      pts[i3+1] = Math.random() * 4;
-      pts[i3+2] = (Math.random() - 0.5) * 70;
+      pts[i*3] = (Math.random()-0.5)*40; pts[i*3+1] = Math.random()*4; pts[i*3+2] = (Math.random()-0.5)*70;
     }
   }
   return pts;
 }
 
-type ViewKey = 'perspective' | 'top' | 'side' | 'front';
+function makeColors(pts: Float32Array): Float32Array {
+  const n = pts.length / 3;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const y = pts[i*3+1];
+    const t = Math.max(0, Math.min(1, 0.3 + y * 0.15));
+    col[i*3] = t; col[i*3+1] = 0.6*(1-Math.abs(t-0.5)*2); col[i*3+2] = 1-t;
+  }
+  return col;
+}
 
-const VIEW_LABELS: Record<ViewKey, string> = {
-  perspective: 'Perspective',
-  top:  'Top',
-  side: 'Side',
-  front: 'Front',
-};
+type ViewKey = 'perspective' | 'top' | 'side' | 'front';
+const VIEW_LABELS: Record<ViewKey, string> = { perspective: 'Perspective', top: 'Top', side: 'Side', front: 'Front' };
 
 export default function PointCloudCanvas({
   points,
@@ -113,236 +96,73 @@ export default function PointCloudCanvas({
   onExpandView,
 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const sceneRef = useRef(new THREE.Scene());
-  const frameRef = useRef(0);
 
-  // Cameras
-  const perspCam = useRef(new THREE.PerspectiveCamera(60, 1, 0.1, 2000));
-  const topCam   = useRef(new THREE.OrthographicCamera(-30, 30, 30, -30, 0.1, 2000));
-  const sideCam  = useRef(new THREE.OrthographicCamera(-30, 30, 30, -30, 0.1, 2000));
-  const frontCam = useRef(new THREE.OrthographicCamera(-30, 30, 30, -30, 0.1, 2000));
-
-  const controlsRef   = useRef<OrbitControls | null>(null);
-  const pointsObjRef  = useRef<THREE.Points | null>(null);
-  const cuboidsGrpRef = useRef(new THREE.Group());
+  // Three.js objects stored in refs — never recreated on re-render
+  const rendererRef    = useRef<THREE.WebGLRenderer | null>(null);
+  const sceneRef       = useRef<THREE.Scene | null>(null);
+  const perspCamRef    = useRef<THREE.PerspectiveCamera | null>(null);
+  const topCamRef      = useRef<THREE.OrthographicCamera | null>(null);
+  const sideCamRef     = useRef<THREE.OrthographicCamera | null>(null);
+  const frontCamRef    = useRef<THREE.OrthographicCamera | null>(null);
+  const controlsRef    = useRef<OrbitControls | null>(null);
+  const pointsObjRef   = useRef<THREE.Points | null>(null);
+  const cuboidsGrpRef  = useRef<THREE.Group | null>(null);
   const gridRef        = useRef<THREE.GridHelper | null>(null);
+  const rafRef         = useRef(0);
+  const initializedRef = useRef(false);
 
-  // Drawing a new cuboid via drag
+  // Keep layout props in a ref so the animation loop always reads current values
+  const layoutRef = useRef({ subViewHeight, expandedView });
+  layoutRef.current = { subViewHeight, expandedView };
+
   const drawRef = useRef<{
-    active: boolean;
-    view: ViewKey;
-    startWorld: THREE.Vector3;
-    previewMesh: THREE.LineSegments | null;
+    active: boolean; view: ViewKey; startWorld: THREE.Vector3; previewMesh: THREE.LineSegments | null;
   }>({ active: false, view: 'top', startWorld: new THREE.Vector3(), previewMesh: null });
 
-  // Ortho view panning
   const panRef = useRef<{ active: boolean; view: ViewKey; lastX: number; lastY: number }>({
     active: false, view: 'top', lastX: 0, lastY: 0,
   });
 
-  const [zoomLabel, setZoomLabel] = useState('');
+  // Current tool/label in a ref so mouse handlers are never stale
+  const toolRef  = useRef({ currentTool, selectedLabel, selectedLabelColor });
+  toolRef.current = { currentTool, selectedLabel, selectedLabelColor };
 
-  // ─── Init Three.js ────────────────────────────────────────────────────
-  useEffect(() => {
-    const mount = mountRef.current;
-    if (!mount) return;
+  const [, forceUpdate] = useState(0);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setClearColor(0x1a1a1a);
-    renderer.setSize(mount.clientWidth, mount.clientHeight);
-    mount.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
-
-    const scene = sceneRef.current;
-
-    // Grid (XZ plane) — repositioned to data floor when real data loads
-    const grid = new THREE.GridHelper(200, 50, 0x333333, 0x2a2a2a);
-    scene.add(grid);
-    gridRef.current = grid;
-
-    // Axes helper (tiny)
-    const axes = new THREE.AxesHelper(3);
-    scene.add(axes);
-
-    // Cuboids group
-    scene.add(cuboidsGrpRef.current);
-
-    // Camera positions
-    perspCam.current.position.set(15, 12, 20);
-    perspCam.current.lookAt(0, 0, 0);
-
-    topCam.current.position.set(0, 80, 0);
-    topCam.current.up.set(0, 0, -1);
-    topCam.current.lookAt(0, 0, 0);
-
-    sideCam.current.position.set(80, 5, 0);
-    sideCam.current.lookAt(0, 5, 0);
-
-    frontCam.current.position.set(0, 5, 80);
-    frontCam.current.lookAt(0, 5, 0);
-
-    // Orbit controls for perspective camera
-    const controls = new OrbitControls(perspCam.current, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.target.set(0, 2, 0);
-    controls.update();
-    controlsRef.current = controls;
-
-    // Load or demo point cloud
-    const cloudPts = points ?? demoCloud();
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(cloudPts, 3));
-
-    let colors: Float32Array;
-    if (pointColors && pointColors.length === cloudPts.length) {
-      colors = pointColors;
-    } else {
-      // Pseudo-intensity: brighter = higher Y
-      colors = new Float32Array(cloudPts.length);
-      for (let i = 0; i < cloudPts.length / 3; i++) {
-        const y = cloudPts[i * 3 + 1];
-        const intensity = Math.min(1, 0.25 + y * 0.18);
-        colors[i * 3]     = intensity;
-        colors[i * 3 + 1] = intensity;
-        colors[i * 3 + 2] = intensity;
-      }
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-    const mat = new THREE.PointsMaterial({ size: 2, vertexColors: true, sizeAttenuation: false });
-    const pts = new THREE.Points(geo, mat);
-    scene.add(pts);
-    pointsObjRef.current = pts;
-
-    // Render loop
-    function animate() {
-      frameRef.current = requestAnimationFrame(animate);
-      controls.update();
-      renderAll(renderer);
-    }
-    animate();
-
-    return () => {
-      cancelAnimationFrame(frameRef.current);
-      controls.dispose();
-      renderer.dispose();
-      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
-    };
-  }, []);
-
-  // ─── Update point cloud when props change ─────────────────────────────
-  useEffect(() => {
-    if (!points || !pointsObjRef.current) return;
-    const geo = pointsObjRef.current.geometry as THREE.BufferGeometry;
-
-    // Remap PCD Z-up (x=fwd, y=lateral, z=height) → Three.js Y-up
-    const n = points.length / 3;
-    const pos = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      pos[i*3]   = points[i*3];    // PCD x → Three.js x
-      pos[i*3+1] = points[i*3+2]; // PCD z → Three.js y (up)
-      pos[i*3+2] = points[i*3+1]; // PCD y → Three.js z
-    }
-
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-
-    // Center at origin so the default camera always sees the data
-    geo.center();
-    geo.computeBoundingBox();
-
-    if (pointColors && pointColors.length === points.length) {
-      geo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
-    }
-
-    if (geo.boundingBox) {
-      const size = new THREE.Vector3();
-      geo.boundingBox.getSize(size);
-      const hRadius = Math.max(size.x, size.z) * 0.8; // horizontal half-extent
-
-      // Reset perspective camera to a clean above-and-behind position
-      perspCam.current.position.set(hRadius * 0.6, hRadius * 0.5, hRadius);
-      perspCam.current.lookAt(0, 0, 0);
-      if (controlsRef.current) {
-        controlsRef.current.target.set(0, 0, 0);
-        controlsRef.current.update();
-      }
-
-      // Snap grid to data floor
-      if (gridRef.current) gridRef.current.position.y = geo.boundingBox.min.y;
-
-      // Ortho sub-views: top looks down (XZ plane), side looks along X, front along Z
-      topCam.current.position.set(0, 500, 0);
-      topCam.current.up.set(0, 0, -1);
-      topCam.current.lookAt(0, 0, 0);
-
-      sideCam.current.position.set(500, 0, 0);
-      sideCam.current.up.set(0, 1, 0);
-      sideCam.current.lookAt(0, 0, 0);
-
-      frontCam.current.position.set(0, 0, 500);
-      frontCam.current.up.set(0, 1, 0);
-      frontCam.current.lookAt(0, 0, 0);
-
-      (topCam.current   as any)._orthoSize = Math.max(size.x, size.z) * 0.55;
-      (sideCam.current  as any)._orthoSize = Math.max(size.x, size.y) * 0.55;
-      (frontCam.current as any)._orthoSize = Math.max(size.z, size.y) * 0.55;
-    }
-  }, [points, pointColors]);
-
-  // ─── Rebuild cuboid meshes when cuboids / selection changes ───────────
-  useEffect(() => {
-    const grp = cuboidsGrpRef.current;
-    grp.clear();
-    cuboids.forEach(c => {
-      if (c.hidden) return;
-      const mesh = makeCuboidLines(c, c.id === selectedCuboidId);
-      grp.add(mesh);
-      // Add orientation arrow if cuboidOrientation enabled
-      if (cuboidOrientation) {
-        const arrow = new THREE.ArrowHelper(
-          new THREE.Vector3(Math.sin(c.rotation), 0, Math.cos(c.rotation)),
-          new THREE.Vector3(c.center.x, c.center.y + c.dimensions.h / 2, c.center.z),
-          c.dimensions.w * 0.7,
-          hexToThreeColor(c.color),
-          0.4, 0.25,
-        );
-        grp.add(arrow);
-      }
-    });
-  }, [cuboids, selectedCuboidId, cuboidOrientation]);
-
-  // ─── Viewport layout helpers ──────────────────────────────────────────
-  const getViewRects = useCallback((w: number, h: number) => {
-    if (expandedView) {
-      const camMap: Record<string, THREE.Camera> = {
-        top: topCam.current, side: sideCam.current, front: frontCam.current,
+  // ─── Viewport layout ──────────────────────────────────────────────────────
+  function getViewRects(w: number, h: number) {
+    const { subViewHeight: svh, expandedView: ev } = layoutRef.current;
+    if (ev) {
+      const camMap: Record<string, THREE.Camera | null> = {
+        top: topCamRef.current, side: sideCamRef.current, front: frontCamRef.current,
       };
-      return [{ key: expandedView as ViewKey, cam: camMap[expandedView], left: 0, bottom: 0, width: w, height: h }];
+      return [{ key: ev as ViewKey, cam: camMap[ev]!, left: 0, bottom: 0, width: w, height: h }];
     }
-    const mainH = h - subViewHeight;
+    const mainH = h - svh;
     const subW  = Math.floor(w / 3);
     return [
-      { key: 'perspective' as ViewKey, cam: perspCam.current,  left: 0,       bottom: subViewHeight, width: w,    height: mainH },
-      { key: 'top'         as ViewKey, cam: topCam.current,    left: 0,       bottom: 0,             width: subW, height: subViewHeight },
-      { key: 'side'        as ViewKey, cam: sideCam.current,   left: subW,    bottom: 0,             width: subW, height: subViewHeight },
-      { key: 'front'       as ViewKey, cam: frontCam.current,  left: subW*2,  bottom: 0,             width: w - subW*2, height: subViewHeight },
+      { key: 'perspective' as ViewKey, cam: perspCamRef.current!,  left: 0,      bottom: svh, width: w,         height: mainH },
+      { key: 'top'         as ViewKey, cam: topCamRef.current!,    left: 0,      bottom: 0,   width: subW,       height: svh },
+      { key: 'side'        as ViewKey, cam: sideCamRef.current!,   left: subW,   bottom: 0,   width: subW,       height: svh },
+      { key: 'front'       as ViewKey, cam: frontCamRef.current!,  left: subW*2, bottom: 0,   width: w-subW*2,   height: svh },
     ];
-  }, [subViewHeight, expandedView]);
+  }
 
-  const renderAll = useCallback((renderer: THREE.WebGLRenderer) => {
-    const mount = mountRef.current;
-    if (!mount) return;
+  function renderAll() {
+    const renderer = rendererRef.current;
+    const scene    = sceneRef.current;
+    const mount    = mountRef.current;
+    if (!renderer || !scene || !mount) return;
+
     const w = mount.clientWidth;
     const h = mount.clientHeight;
+    if (w === 0 || h === 0) return;
 
     renderer.setScissorTest(true);
     const rects = getViewRects(w, h);
 
     rects.forEach(({ cam, left, bottom, width, height }) => {
-      if (width <= 0 || height <= 0) return;
+      if (!cam || width <= 0 || height <= 0) return;
       renderer.setScissor(left, bottom, width, height);
       renderer.setViewport(left, bottom, width, height);
 
@@ -352,43 +172,206 @@ export default function PointCloudCanvas({
       } else if (cam instanceof THREE.OrthographicCamera) {
         const aspect = width / height;
         const size   = (cam as any)._orthoSize ?? 25;
-        cam.left   = -size * aspect;
-        cam.right  =  size * aspect;
-        cam.top    =  size;
-        cam.bottom = -size;
+        cam.left = -size * aspect; cam.right = size * aspect;
+        cam.top  =  size;         cam.bottom = -size;
         cam.updateProjectionMatrix();
       }
 
-      renderer.render(sceneRef.current, cam);
+      renderer.render(scene, cam);
     });
-  }, [getViewRects]);
+  }
 
-  // ─── Resize ───────────────────────────────────────────────────────────
+  // ─── Init Three.js (runs once after mount) ────────────────────────────────
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount) return;
-    const ro = new ResizeObserver(() => {
-      const w = mount.clientWidth, h = mount.clientHeight;
-      rendererRef.current?.setSize(w, h);
+    if (!mount || initializedRef.current) return;
+    initializedRef.current = true;
+
+    const scene = new THREE.Scene();
+    sceneRef.current = scene;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x1a1a1a, 1);
+    // Size set by ResizeObserver — start with current dimensions
+    const w0 = mount.clientWidth  || 800;
+    const h0 = mount.clientHeight || 600;
+    renderer.setSize(w0, h0);
+    mount.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
+
+    // Cameras
+    const perspCam = new THREE.PerspectiveCamera(60, w0 / h0, 0.1, 5000);
+    perspCam.position.set(20, 15, 30);
+    perspCam.lookAt(0, 0, 0);
+    perspCamRef.current = perspCam;
+
+    const makeOrtho = () => new THREE.OrthographicCamera(-30, 30, 30, -30, 0.1, 5000);
+    const topCam   = makeOrtho(); topCam.position.set(0, 200, 0); topCam.up.set(0, 0, -1); topCam.lookAt(0, 0, 0);
+    const sideCam  = makeOrtho(); sideCam.position.set(200, 0, 0); sideCam.up.set(0, 1, 0); sideCam.lookAt(0, 0, 0);
+    const frontCam = makeOrtho(); frontCam.position.set(0, 0, 200); frontCam.up.set(0, 1, 0); frontCam.lookAt(0, 0, 0);
+    topCamRef.current   = topCam;
+    sideCamRef.current  = sideCam;
+    frontCamRef.current = frontCam;
+    (topCam as any)._orthoSize = 25;
+    (sideCam as any)._orthoSize = 25;
+    (frontCam as any)._orthoSize = 25;
+
+    // Grid
+    const grid = new THREE.GridHelper(200, 50, 0x333333, 0x2a2a2a);
+    scene.add(grid);
+    gridRef.current = grid;
+
+    // Axes
+    scene.add(new THREE.AxesHelper(3));
+
+    // Cuboids group
+    const grp = new THREE.Group();
+    scene.add(grp);
+    cuboidsGrpRef.current = grp;
+
+    // Point cloud — demo until real data arrives
+    const demoPts = demoCloud();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(demoPts, 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(makeColors(demoPts), 3));
+    const mat = new THREE.PointsMaterial({ size: 2, vertexColors: true, sizeAttenuation: false });
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    pointsObjRef.current = pts;
+
+    // OrbitControls — NO damping to avoid camera drift on programmatic moves
+    const controls = new OrbitControls(perspCam, renderer.domElement);
+    controls.enableDamping = false;
+    controls.target.set(0, 2, 0);
+    controls.update();
+    controlsRef.current = controls;
+
+    // Render loop
+    function animate() {
+      rafRef.current = requestAnimationFrame(animate);
+      controls.update();
+      renderAll();
+    }
+    animate();
+
+    // Resize observer
+    const ro = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) {
+        renderer.setSize(width, height);
+      }
     });
     ro.observe(mount);
-    return () => ro.disconnect();
-  }, []);
 
-  // ─── Mouse helpers ────────────────────────────────────────────────────
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      ro.disconnect();
+      controls.dispose();
+      renderer.dispose();
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+      initializedRef.current = false;
+      rendererRef.current    = null;
+      sceneRef.current       = null;
+      perspCamRef.current    = null;
+      topCamRef.current      = null;
+      sideCamRef.current     = null;
+      frontCamRef.current    = null;
+      controlsRef.current    = null;
+      pointsObjRef.current   = null;
+      cuboidsGrpRef.current  = null;
+      gridRef.current        = null;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Update geometry when points prop changes ─────────────────────────────
+  useEffect(() => {
+    const ptsObj = pointsObjRef.current;
+    if (!points || !ptsObj) return;
+
+    const geo = ptsObj.geometry as THREE.BufferGeometry;
+    const n   = points.length / 3;
+
+    // PCD is Z-up (x=forward, y=lateral, z=height) → Three.js Y-up
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      pos[i*3]   = points[i*3];     // PCD x → Three.js x
+      pos[i*3+1] = points[i*3+2];  // PCD z → Three.js y (up)
+      pos[i*3+2] = -points[i*3+1]; // PCD y → Three.js -z (negate so road goes forward)
+    }
+
+    const validColors = pointColors && pointColors.length === points.length;
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(validColors ? pointColors : makeColors(pos), 3));
+
+    // Center at origin so camera always sees data regardless of coordinate offset
+    geo.center();
+    geo.computeBoundingBox();
+
+    if (!geo.boundingBox) return;
+
+    const size = new THREE.Vector3();
+    geo.boundingBox.getSize(size);
+
+    // Horizontal extent (XZ plane) drives camera distance
+    const hExt    = Math.max(size.x, size.z, 1);
+    const vExt    = Math.max(size.y, 1);
+    const camDist = hExt * 1.2;
+
+    // Place camera at a 30° elevation viewing the cloud from the front
+    const perspCam = perspCamRef.current;
+    const controls = controlsRef.current;
+    if (perspCam && controls) {
+      // Completely reset the controls state before moving camera
+      controls.target.set(0, 0, 0);
+      perspCam.position.set(0, camDist * 0.5, camDist);
+      perspCam.up.set(0, 1, 0);
+      perspCam.lookAt(0, 0, 0);
+      controls.update();
+    }
+
+    // Snap grid to the floor of the data
+    if (gridRef.current) gridRef.current.position.y = geo.boundingBox.min.y - 0.05;
+
+    // Ortho cameras sized to show the whole cloud
+    const topCam   = topCamRef.current;
+    const sideCam  = sideCamRef.current;
+    const frontCam = frontCamRef.current;
+    if (topCam)   { topCam.position.set(0, 500, 0);   topCam.up.set(0, 0, -1);  topCam.lookAt(0, 0, 0); (topCam as any)._orthoSize   = hExt * 0.55; }
+    if (sideCam)  { sideCam.position.set(500, 0, 0);  sideCam.up.set(0, 1, 0);  sideCam.lookAt(0, 0, 0); (sideCam as any)._orthoSize  = Math.max(hExt, vExt) * 0.55; }
+    if (frontCam) { frontCam.position.set(0, 0, 500); frontCam.up.set(0, 1, 0); frontCam.lookAt(0, 0, 0); (frontCam as any)._orthoSize = Math.max(hExt, vExt) * 0.55; }
+  }, [points, pointColors]);
+
+  // ─── Rebuild cuboid meshes ─────────────────────────────────────────────────
+  useEffect(() => {
+    const grp = cuboidsGrpRef.current;
+    if (!grp) return;
+    grp.clear();
+    cuboids.forEach(c => {
+      if (c.hidden) return;
+      grp.add(makeCuboidLines(c, c.id === selectedCuboidId));
+      if (cuboidOrientation) {
+        grp.add(new THREE.ArrowHelper(
+          new THREE.Vector3(Math.sin(c.rotation), 0, Math.cos(c.rotation)),
+          new THREE.Vector3(c.center.x, c.center.y + c.dimensions.h / 2, c.center.z),
+          c.dimensions.w * 0.7, hexColor(c.color), 0.4, 0.25,
+        ));
+      }
+    });
+  }, [cuboids, selectedCuboidId, cuboidOrientation]);
+
+  // ─── Mouse helpers ─────────────────────────────────────────────────────────
   function whichViewport(clientX: number, clientY: number): ViewKey {
     const mount = mountRef.current!;
     const rect  = mount.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    const h = mount.clientHeight;
-    const w = mount.clientWidth;
-
-    if (expandedView) return expandedView as ViewKey;
-
-    if (y < h - subViewHeight) return 'perspective';
-    const subW = Math.floor(w / 3);
-    const col  = Math.floor(x / subW);
+    const { subViewHeight: svh, expandedView: ev } = layoutRef.current;
+    if (ev) return ev as ViewKey;
+    if (y < mount.clientHeight - svh) return 'perspective';
+    const col = Math.floor(x / Math.floor(mount.clientWidth / 3));
     return (['top', 'side', 'front'] as ViewKey[])[Math.min(col, 2)];
   }
 
@@ -397,261 +380,171 @@ export default function PointCloudCanvas({
     const rect  = mount.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    const h = mount.clientHeight;
-    const w = mount.clientWidth;
-
+    const { subViewHeight: svh, expandedView: ev } = layoutRef.current;
+    const w = mount.clientWidth, h = mount.clientHeight;
     let vLeft: number, vBottom: number, vW: number, vH: number;
-    if (expandedView) {
-      vLeft = 0; vBottom = 0; vW = w; vH = h;
-    } else {
-      const subW  = Math.floor(w / 3);
-      const mainH = h - subViewHeight;
+    if (ev) { vLeft = 0; vBottom = 0; vW = w; vH = h; }
+    else {
+      const subW = Math.floor(w / 3);
+      const mainH = h - svh;
       if (vp === 'perspective') { vLeft = 0; vBottom = 0; vW = w; vH = mainH; }
-      else if (vp === 'top')   { vLeft = 0;       vBottom = mainH; vW = subW; vH = subViewHeight; }
-      else if (vp === 'side')  { vLeft = subW;    vBottom = mainH; vW = subW; vH = subViewHeight; }
-      else                     { vLeft = subW*2;  vBottom = mainH; vW = w - subW*2; vH = subViewHeight; }
+      else if (vp === 'top')   { vLeft = 0;      vBottom = mainH; vW = subW; vH = svh; }
+      else if (vp === 'side')  { vLeft = subW;   vBottom = mainH; vW = subW; vH = svh; }
+      else                     { vLeft = subW*2; vBottom = mainH; vW = w-subW*2; vH = svh; }
     }
-
-    return new THREE.Vector2(
-      ((x - vLeft) / vW)   * 2 - 1,
-      -((y - vBottom) / vH) * 2 + 1,
-    );
+    return new THREE.Vector2(((x - vLeft) / vW) * 2 - 1, -((y - vBottom) / vH) * 2 + 1);
   }
 
-  function worldFromOrtho(ndc: THREE.Vector2, cam: THREE.OrthographicCamera, groundY = 0): THREE.Vector3 {
+  function worldFromOrtho(ndc: THREE.Vector2, cam: THREE.OrthographicCamera): THREE.Vector3 {
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, cam);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const target = new THREE.Vector3();
     ray.ray.intersectPlane(plane, target);
     return target;
   }
 
-  // ─── Mouse events ─────────────────────────────────────────────────────
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const vp = whichViewport(e.clientX, e.clientY);
-
-    if (currentTool === 'cuboid' && vp !== 'perspective') {
-      const camMap: Record<ViewKey, THREE.OrthographicCamera> = {
-        top: topCam.current, side: sideCam.current, front: frontCam.current,
-        perspective: topCam.current,
-      };
-      const cam = camMap[vp];
-      const ndc = canvasNDC(e.clientX, e.clientY, vp);
-      const world = worldFromOrtho(ndc, cam);
-
+    const { currentTool: tool } = toolRef.current;
+    if (tool === 'cuboid' && vp !== 'perspective') {
+      const camMap = { top: topCamRef.current, side: sideCamRef.current, front: frontCamRef.current, perspective: topCamRef.current };
+      const cam = camMap[vp as keyof typeof camMap];
+      if (!cam) return;
+      const world = worldFromOrtho(canvasNDC(e.clientX, e.clientY, vp), cam as THREE.OrthographicCamera);
       drawRef.current = { active: true, view: vp, startWorld: world, previewMesh: null };
       return;
     }
-
-    if (currentTool === 'select' && vp !== 'perspective') {
-      // Raycasting cuboids in ortho view
-      const camMap: Record<ViewKey, THREE.Camera> = {
-        top: topCam.current, side: sideCam.current, front: frontCam.current,
-        perspective: perspCam.current,
-      };
-      const cam = camMap[vp];
-      const ndc = canvasNDC(e.clientX, e.clientY, vp);
+    if (tool === 'select' && vp !== 'perspective') {
+      const camMap = { top: topCamRef.current, side: sideCamRef.current, front: frontCamRef.current, perspective: perspCamRef.current };
+      const cam = camMap[vp as keyof typeof camMap];
+      if (!cam) return;
       const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(ndc, cam);
-      const hits = raycaster.intersectObjects(cuboidsGrpRef.current.children, true);
+      raycaster.setFromCamera(canvasNDC(e.clientX, e.clientY, vp), cam);
+      const hits = raycaster.intersectObjects(cuboidsGrpRef.current?.children ?? [], true);
       if (hits.length) {
         let obj: THREE.Object3D | null = hits[0].object;
         while (obj && !obj.userData['cuboidId']) obj = obj.parent;
         if (obj) { onSelectCuboid?.(obj.userData['cuboidId']); return; }
       }
       onSelectCuboid?.(null);
-      // Start ortho pan
       panRef.current = { active: true, view: vp, lastX: e.clientX, lastY: e.clientY };
-      return;
     }
-
-    // In perspective view, OrbitControls handles mouse
-  }, [currentTool, onSelectCuboid, expandedView]);
+  }, [onSelectCuboid]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
-    // Ortho pan
     if (panRef.current.active) {
       const dx = e.clientX - panRef.current.lastX;
       const dy = e.clientY - panRef.current.lastY;
       panRef.current.lastX = e.clientX;
       panRef.current.lastY = e.clientY;
-
-      const applyPan = (cam: THREE.OrthographicCamera) => {
-        const size   = (cam as any)._orthoSize ?? 25;
-        const mount  = mountRef.current!;
-        const w = mount.clientWidth, h = mount.clientHeight;
-        const subW = Math.floor(w / 3);
-        const vpW  = expandedView ? w : subW;
-        const vpH  = expandedView ? h : subViewHeight;
-        const worldDx = -(dx / vpW)  * (cam.right - cam.left);
+      const applyPan = (cam: THREE.OrthographicCamera, vpW: number, vpH: number) => {
+        const worldDx = -(dx / vpW) * (cam.right - cam.left);
         const worldDy = -(dy / vpH) * (cam.top - cam.bottom);
-        cam.position.x   -= worldDx;
-        cam.position.z   -= worldDy;
+        cam.position.x -= worldDx;
+        cam.position.z -= worldDy;
         cam.lookAt(cam.position.x, 0, cam.position.z + 0.001);
         cam.updateProjectionMatrix();
       };
-
-      if (panRef.current.view === 'top')   applyPan(topCam.current);
-      if (panRef.current.view === 'side')  applyPan(sideCam.current);
-      if (panRef.current.view === 'front') applyPan(frontCam.current);
+      const mount = mountRef.current!;
+      const w = mount.clientWidth, h = mount.clientHeight;
+      const svh = layoutRef.current.subViewHeight;
+      const subW = Math.floor(w / 3);
+      if (panRef.current.view === 'top'   && topCamRef.current)   applyPan(topCamRef.current,   subW, svh);
+      if (panRef.current.view === 'side'  && sideCamRef.current)  applyPan(sideCamRef.current,  subW, svh);
+      if (panRef.current.view === 'front' && frontCamRef.current) applyPan(frontCamRef.current, subW, svh);
       return;
     }
-
-    // Cuboid preview
-    if (drawRef.current.active && currentTool === 'cuboid') {
-      const camMap: Record<ViewKey, THREE.OrthographicCamera> = {
-        top: topCam.current, side: sideCam.current, front: frontCam.current,
-        perspective: topCam.current,
-      };
-      const cam = camMap[drawRef.current.view];
-      const ndc = canvasNDC(e.clientX, e.clientY, drawRef.current.view);
-      const world = worldFromOrtho(ndc, cam);
-
-      // Remove old preview
-      if (drawRef.current.previewMesh) {
-        sceneRef.current.remove(drawRef.current.previewMesh);
-        drawRef.current.previewMesh = null;
-      }
-
+    if (drawRef.current.active && toolRef.current.currentTool === 'cuboid') {
+      const camMap = { top: topCamRef.current, side: sideCamRef.current, front: frontCamRef.current, perspective: topCamRef.current };
+      const cam = camMap[drawRef.current.view as keyof typeof camMap];
+      if (!cam) return;
+      const world = worldFromOrtho(canvasNDC(e.clientX, e.clientY, drawRef.current.view), cam as THREE.OrthographicCamera);
+      const scene = sceneRef.current;
+      if (!scene) return;
+      if (drawRef.current.previewMesh) { scene.remove(drawRef.current.previewMesh); drawRef.current.previewMesh = null; }
       const s = drawRef.current.startWorld;
-      const w = Math.abs(world.x - s.x) || 0.1;
-      const d = Math.abs(world.z - s.z) || 0.1;
-      const h = 2.0;
-
+      const { selectedLabel: lbl, selectedLabelColor: lc } = toolRef.current;
       const preview: Cuboid3D = {
-        id: '__preview__',
-        label: selectedLabel || 'object',
-        color: selectedLabelColor,
+        id: '__preview__', label: lbl || 'object', color: lc,
         center: { x: (s.x + world.x) / 2, y: 0, z: (s.z + world.z) / 2 },
-        dimensions: { w, h, d },
+        dimensions: { w: Math.abs(world.x - s.x) || 0.1, h: 2.0, d: Math.abs(world.z - s.z) || 0.1 },
         rotation: 0,
       };
       const mesh = makeCuboidLines(preview, true);
-      sceneRef.current.add(mesh);
+      scene.add(mesh);
       drawRef.current.previewMesh = mesh;
     }
-  }, [currentTool, selectedLabel, selectedLabelColor, subViewHeight, expandedView]);
+  }, []);
 
   const onMouseUp = useCallback((e: React.MouseEvent) => {
     panRef.current.active = false;
-
-    if (drawRef.current.active && currentTool === 'cuboid') {
-      if (drawRef.current.previewMesh) {
-        sceneRef.current.remove(drawRef.current.previewMesh);
-        drawRef.current.previewMesh = null;
-      }
-
-      const camMap: Record<ViewKey, THREE.OrthographicCamera> = {
-        top: topCam.current, side: sideCam.current, front: frontCam.current,
-        perspective: topCam.current,
-      };
-      const cam = camMap[drawRef.current.view];
-      const ndc = canvasNDC(e.clientX, e.clientY, drawRef.current.view);
-      const world = worldFromOrtho(ndc, cam);
-      const s = drawRef.current.startWorld;
-
-      const w = Math.abs(world.x - s.x);
-      const d = Math.abs(world.z - s.z);
-      if (w > 0.3 && d > 0.3) {
-        const newCuboid: Cuboid3D = {
-          id: uid(),
-          label: selectedLabel || 'object',
-          color: selectedLabelColor,
-          center: { x: (s.x + world.x) / 2, y: 0, z: (s.z + world.z) / 2 },
-          dimensions: { w, h: 2.0, d },
-          rotation: 0,
-        };
-        onAddCuboid?.(newCuboid);
+    if (drawRef.current.active && toolRef.current.currentTool === 'cuboid') {
+      const scene = sceneRef.current;
+      if (scene && drawRef.current.previewMesh) { scene.remove(drawRef.current.previewMesh); drawRef.current.previewMesh = null; }
+      const camMap = { top: topCamRef.current, side: sideCamRef.current, front: frontCamRef.current, perspective: topCamRef.current };
+      const cam = camMap[drawRef.current.view as keyof typeof camMap];
+      if (cam) {
+        const world = worldFromOrtho(canvasNDC(e.clientX, e.clientY, drawRef.current.view), cam as THREE.OrthographicCamera);
+        const s = drawRef.current.startWorld;
+        const w = Math.abs(world.x - s.x), d = Math.abs(world.z - s.z);
+        if (w > 0.3 && d > 0.3) {
+          const { selectedLabel: lbl, selectedLabelColor: lc } = toolRef.current;
+          onAddCuboid?.({ id: uid(), label: lbl || 'object', color: lc, center: { x: (s.x+world.x)/2, y: 0, z: (s.z+world.z)/2 }, dimensions: { w, h: 2.0, d }, rotation: 0 });
+        }
       }
     }
     drawRef.current.active = false;
-  }, [currentTool, selectedLabel, selectedLabelColor, onAddCuboid, expandedView]);
+  }, [onAddCuboid]);
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     const vp = whichViewport(e.clientX, e.clientY);
-    if (vp === 'perspective') return; // OrbitControls handles zoom
-
-    const orthoMap: Partial<Record<ViewKey, THREE.OrthographicCamera>> = {
-      top: topCam.current, side: sideCam.current, front: frontCam.current,
+    if (vp === 'perspective') return;
+    const camMap: Partial<Record<ViewKey, THREE.OrthographicCamera | null>> = {
+      top: topCamRef.current, side: sideCamRef.current, front: frontCamRef.current,
     };
-    const cam = orthoMap[vp];
+    const cam = camMap[vp];
     if (!cam) return;
-    const factor = e.deltaY < 0 ? 0.85 : 1.18;
-    (cam as any)._orthoSize = ((cam as any)._orthoSize ?? 25) * factor;
-    setZoomLabel(Math.round(100 / ((cam as any)._orthoSize / 25)) + '%');
-  }, [expandedView]);
+    (cam as any)._orthoSize = Math.max(1, ((cam as any)._orthoSize ?? 25) * (e.deltaY < 0 ? 0.85 : 1.18));
+  }, []);
 
-  // ─── Viewport overlay labels ───────────────────────────────────────────
   const subViews: ViewKey[] = ['top', 'side', 'front'];
 
   return (
-    <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden', background: '#1a1a1a' }}
+    <div
+      ref={mountRef}
+      style={{ position: 'absolute', inset: 0, background: '#1a1a1a', overflow: 'hidden' }}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onWheel={onWheel}
     >
-      {/* Three.js canvas is appended here by the effect */}
-
-      {/* Main view label */}
       {!expandedView && (
         <div style={{ position: 'absolute', top: 8, left: 8, pointerEvents: 'none', zIndex: 10 }}>
-          <span style={{ background: 'rgba(0,0,0,0.5)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600, letterSpacing: '0.5px' }}>
-            Perspective
-          </span>
+          <span style={{ background: 'rgba(0,0,0,0.5)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>Perspective</span>
         </div>
       )}
-
-      {/* Main view: left/right frame arrows */}
-      {!expandedView && (
-        <div style={{ position: 'absolute', bottom: subViewHeight + 8, right: 8, display: 'flex', gap: 4, zIndex: 10 }}>
-          {(['←', '→'] as const).map((arrow, i) => (
-            <button key={i} style={{ width: 28, height: 28, borderRadius: 4, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(0,0,0,0.5)', color: '#fff', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {arrow}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Sub-view dividers and labels */}
       {!expandedView && (
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: subViewHeight, display: 'flex', borderTop: '1px solid #333', pointerEvents: 'none', zIndex: 10 }}>
           {subViews.map((view, i) => (
             <div key={view} style={{ flex: 1, position: 'relative', borderRight: i < 2 ? '1px solid #333' : undefined }}>
-              {/* Label */}
-              <div style={{ position: 'absolute', top: 6, left: 8, pointerEvents: 'none' }}>
-                <span style={{ background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600, letterSpacing: '0.5px' }}>
-                  {VIEW_LABELS[view]}
-                </span>
+              <div style={{ position: 'absolute', top: 6, left: 8 }}>
+                <span style={{ background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>{VIEW_LABELS[view]}</span>
               </div>
-              {/* Controls: expand and move */}
-              <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4, pointerEvents: 'auto' }}>
+              <div style={{ position: 'absolute', top: 6, right: 6, pointerEvents: 'auto' }}>
                 <button
                   onClick={() => onExpandView?.(view as 'top' | 'side' | 'front')}
-                  title={`Expand ${VIEW_LABELS[view]} view`}
-                  style={{ width: 22, height: 22, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3, background: 'rgba(0,0,0,0.55)', color: '#fff', cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  ⤢
-                </button>
-                <button
-                  title="Pan view"
-                  style={{ width: 22, height: 22, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3, background: 'rgba(0,0,0,0.55)', color: '#fff', cursor: 'grab', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  ✛
-                </button>
+                  style={{ width: 22, height: 22, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3, background: 'rgba(0,0,0,0.55)', color: '#fff', cursor: 'pointer', fontSize: 11 }}>⤢</button>
               </div>
             </div>
           ))}
         </div>
       )}
-
-      {/* Expanded view controls */}
       {expandedView && (
         <>
           <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 10, pointerEvents: 'none' }}>
-            <span style={{ background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600, letterSpacing: '0.5px' }}>
-              {VIEW_LABELS[expandedView]}
-            </span>
+            <span style={{ background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>{VIEW_LABELS[expandedView]}</span>
           </div>
           <button onClick={() => onExpandView?.(null)}
             style={{ position: 'absolute', top: 8, right: 8, zIndex: 10, padding: '4px 10px', background: 'rgba(0,0,0,0.6)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
@@ -659,8 +552,6 @@ export default function PointCloudCanvas({
           </button>
         </>
       )}
-
-      {/* Crosshair cursors for ortho views */}
       {currentTool === 'cuboid' && (
         <div style={{ position: 'absolute', inset: 0, cursor: 'crosshair', pointerEvents: 'none', zIndex: 5 }} />
       )}
