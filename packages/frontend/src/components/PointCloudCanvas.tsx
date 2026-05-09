@@ -238,8 +238,7 @@ export default function PointCloudCanvas({
     if (!points || !pointsObjRef.current) return;
     const geo = pointsObjRef.current.geometry as THREE.BufferGeometry;
 
-    // PCD files use Z-up (x=forward, y=left, z=up).
-    // Three.js uses Y-up, so we remap: Three.js(x,y,z) = PCD(x,z,y)
+    // Remap PCD Z-up (x=fwd, y=lateral, z=height) → Three.js Y-up
     const n = points.length / 3;
     const pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
@@ -249,52 +248,47 @@ export default function PointCloudCanvas({
     }
 
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+    // Center at origin so the default camera always sees the data
+    geo.center();
     geo.computeBoundingBox();
+
     if (pointColors && pointColors.length === points.length) {
       geo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
     }
-    geo.attributes.position.needsUpdate = true;
 
-    // Auto-fit cameras to the axis-aligned bounding box
     if (geo.boundingBox) {
-      const center = new THREE.Vector3();
-      const size   = new THREE.Vector3();
-      geo.boundingBox.getCenter(center);
+      const size = new THREE.Vector3();
       geo.boundingBox.getSize(size);
+      const hRadius = Math.max(size.x, size.z) * 0.8; // horizontal half-extent
 
-      // Horizontal extent (XZ ground plane), vertical extent (Y)
-      const hRadius = Math.max(size.x, size.z) * 0.65;
-      const camY    = center.y + Math.max(size.y * 4, hRadius * 0.5);
-
-      perspCam.current.position.set(center.x + hRadius, camY, center.z + hRadius);
+      // Reset perspective camera to a clean above-and-behind position
+      perspCam.current.position.set(hRadius * 0.6, hRadius * 0.5, hRadius);
+      perspCam.current.lookAt(0, 0, 0);
       if (controlsRef.current) {
-        controlsRef.current.target.copy(center);
+        controlsRef.current.target.set(0, 0, 0);
         controlsRef.current.update();
       }
 
-      // Top (bird's-eye): camera directly above, -Z is "up" on screen
-      topCam.current.position.set(center.x, center.y + 500, center.z);
+      // Snap grid to data floor
+      if (gridRef.current) gridRef.current.position.y = geo.boundingBox.min.y;
+
+      // Ortho sub-views: top looks down (XZ plane), side looks along X, front along Z
+      topCam.current.position.set(0, 500, 0);
       topCam.current.up.set(0, 0, -1);
-      topCam.current.lookAt(center.x, center.y, center.z);
+      topCam.current.lookAt(0, 0, 0);
 
-      // Side: look along X axis
-      sideCam.current.position.set(center.x + 500, center.y, center.z);
+      sideCam.current.position.set(500, 0, 0);
       sideCam.current.up.set(0, 1, 0);
-      sideCam.current.lookAt(center.x, center.y, center.z);
+      sideCam.current.lookAt(0, 0, 0);
 
-      // Front: look along Z axis
-      frontCam.current.position.set(center.x, center.y, center.z + 500);
+      frontCam.current.position.set(0, 0, 500);
       frontCam.current.up.set(0, 1, 0);
-      frontCam.current.lookAt(center.x, center.y, center.z);
+      frontCam.current.lookAt(0, 0, 0);
 
-      (topCam.current   as any)._orthoSize = hRadius * 1.1;
-      (sideCam.current  as any)._orthoSize = Math.max(size.x, size.y) * 0.65;
-      (frontCam.current as any)._orthoSize = Math.max(size.z, size.y) * 0.65;
-
-      // Snap grid to data floor level
-      if (gridRef.current) {
-        gridRef.current.position.y = geo.boundingBox.min.y;
-      }
+      (topCam.current   as any)._orthoSize = Math.max(size.x, size.z) * 0.55;
+      (sideCam.current  as any)._orthoSize = Math.max(size.x, size.y) * 0.55;
+      (frontCam.current as any)._orthoSize = Math.max(size.z, size.y) * 0.55;
     }
   }, [points, pointColors]);
 
