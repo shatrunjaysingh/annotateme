@@ -78,6 +78,11 @@ export default function AnnotationEditor() {
   const [pcdLoading, setPcdLoading] = useState(false);
   const [pcdError, setPcdError] = useState<string | null>(null);
 
+  // Video extraction
+  const [videoModal, setVideoModal] = useState<{ file: File; fps: number } | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractProgress, setExtractProgress] = useState('');
+
   // Label creation
   const [showAddLabel, setShowAddLabel] = useState(false);
   const [newLabelName, setNewLabelName] = useState('');
@@ -671,22 +676,37 @@ export default function AnnotationEditor() {
             </>
           )}
           <div style={{ width: 28, height: 1, background: '#f0f0f0', margin: '6px 0' }} />
-          {/* Upload images */}
-          <label title="Upload images to this task" style={{ width: 36, height: 36, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#595959', transition: 'all 0.15s' }}
+          {/* Upload files */}
+          <label title={viewMode === '3d' ? 'Upload .pcd files' : 'Upload images or video'} style={{ width: 36, height: 36, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#595959', transition: 'all 0.15s' }}
             onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
             onMouseLeave={e => (e.currentTarget.style.background = '')}>
-            <input ref={uploadRef} type="file" multiple accept={viewMode === '3d' ? '.pcd' : 'image/*'} style={{ display: 'none' }} onChange={async (e) => {
-              if (!e.target.files || !job?.task?.id) return;
-              const formData = new FormData();
-              formData.append('taskId', job.task.id);
-              for (const f of Array.from(e.target.files)) formData.append('files', f);
-              try {
-                await client.post('/files/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-                const { data: f } = await client.get(`/files/task/${job.task.id}`);
-                setFiles(f);
-              } catch { /* no-op */ }
-              e.target.value = '';
-            }} />
+            <input ref={uploadRef} type="file" multiple
+              accept={viewMode === '3d' ? '.pcd' : 'image/*,video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm'}
+              style={{ display: 'none' }}
+              onChange={async (e) => {
+                if (!e.target.files || !job?.task?.id) return;
+                const allFiles = Array.from(e.target.files);
+                const videoFiles = allFiles.filter(f => f.type.startsWith('video/'));
+                const imageFiles = allFiles.filter(f => !f.type.startsWith('video/'));
+
+                // Upload images immediately (existing behaviour)
+                if (imageFiles.length > 0) {
+                  const fd = new FormData();
+                  fd.append('taskId', job.task.id);
+                  imageFiles.forEach(f => fd.append('files', f));
+                  try {
+                    await client.post('/files/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                    const { data: updated } = await client.get(`/files/task/${job.task.id}`);
+                    setFiles(updated);
+                  } catch { /* no-op */ }
+                }
+
+                // Video files → show FPS picker modal (one at a time)
+                if (videoFiles.length > 0) {
+                  setVideoModal({ file: videoFiles[0], fps: 1 });
+                }
+                e.target.value = '';
+              }} />
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           </label>
           {/* Selected label color swatch */}
@@ -971,6 +991,79 @@ export default function AnnotationEditor() {
           </div>
         </div>
       </div>
+
+      {/* VIDEO EXTRACTION MODAL */}
+      {videoModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 380, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>Extract frames from video</div>
+            <div style={{ fontSize: 13, color: '#595959', marginBottom: 20 }}>{videoModal.file.name}</div>
+
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Frames per second</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[1, 2, 5, 10, 25].map(fps => (
+                  <button key={fps} onClick={() => setVideoModal(v => v ? { ...v, fps } : v)}
+                    style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: `1.5px solid ${videoModal.fps === fps ? '#1890ff' : '#d9d9d9'}`, background: videoModal.fps === fps ? '#e6f4ff' : '#fff', color: videoModal.fps === fps ? '#1890ff' : '#595959', fontWeight: videoModal.fps === fps ? 600 : 400, cursor: 'pointer', fontSize: 13 }}>
+                    {fps}
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 8 }}>
+                Higher FPS = more frames to annotate. For most annotation tasks, 1–5 fps is sufficient.
+              </div>
+            </div>
+
+            {extracting && (
+              <div style={{ marginBottom: 16, padding: '10px 14px', background: '#f0f7ff', borderRadius: 8, fontSize: 13, color: '#1890ff', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="spinner" style={{ width: 14, height: 14 }} />
+                {extractProgress || 'Uploading video…'}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => { if (!extracting) setVideoModal(null); }}
+                disabled={extracting}
+                style={{ padding: '7px 18px', borderRadius: 6, border: '1px solid #d9d9d9', background: '#fff', cursor: extracting ? 'not-allowed' : 'pointer', fontSize: 13, opacity: extracting ? 0.5 : 1 }}>
+                Cancel
+              </button>
+              <button
+                disabled={extracting}
+                onClick={async () => {
+                  if (!job?.task?.id || !videoModal) return;
+                  setExtracting(true);
+                  setExtractProgress('Uploading video…');
+                  try {
+                    // 1. Upload the video file
+                    const fd = new FormData();
+                    fd.append('taskId', job.task.id);
+                    fd.append('files', videoModal.file);
+                    const { data: uploaded } = await client.post('/files/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                    const videoFileId = uploaded[0]?.id;
+                    if (!videoFileId) throw new Error('Upload failed');
+
+                    // 2. Extract frames
+                    setExtractProgress(`Extracting frames at ${videoModal.fps} fps…`);
+                    const { data: result } = await client.post(`/files/${videoFileId}/extract-frames`, { fps: videoModal.fps });
+
+                    // 3. Reload file list
+                    setExtractProgress(`Done — ${result.framesExtracted} frames extracted`);
+                    const { data: updated } = await client.get(`/files/task/${job.task.id}`);
+                    setFiles(updated);
+                    setTimeout(() => { setVideoModal(null); setExtracting(false); setExtractProgress(''); }, 800);
+                  } catch (err: any) {
+                    setExtractProgress('');
+                    setExtracting(false);
+                    alert(err?.response?.data?.error || err?.message || 'Extraction failed');
+                  }
+                }}
+                style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: extracting ? '#91caff' : '#1890ff', color: '#fff', cursor: extracting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600 }}>
+                {extracting ? 'Working…' : 'Extract frames'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* STATUS BAR */}
       <div style={{ height: 24, background: '#1f1f1f', display: 'flex', alignItems: 'center', padding: '0 12px', gap: 16, flexShrink: 0, borderTop: '1px solid #333' }}>

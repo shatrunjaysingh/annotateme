@@ -8,6 +8,7 @@ import { Task } from "../entities/Task";
 import { Job } from "../entities/Job";
 import { authMiddleware, AuthRequest } from "../middlewares/auth";
 import { parsePCD } from "../services/pcd-parser";
+import { extractFrames } from "../services/video-extractor";
 
 const router = Router();
 router.use(authMiddleware);
@@ -140,6 +141,76 @@ router.get("/:id", async (req: AuthRequest, res) => {
     res.json(file);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch file" });
+  }
+});
+
+// POST /files/:id/extract-frames  body: { fps: 1|2|5|10|25 }
+// Extracts JPEG frames from an uploaded video and registers them as File records.
+router.post("/:id/extract-frames", async (req: AuthRequest, res) => {
+  try {
+    const file = await fileRepo.findOne({ where: { id: req.params.id } });
+    if (!file) return res.status(404).json({ error: "File not found" });
+
+    const isVideo = /\.(mp4|avi|mov|mkv|webm)$/i.test(file.originalName ?? file.path ?? "");
+    if (!isVideo) return res.status(400).json({ error: "Not a video file" });
+
+    if (!fs.existsSync(file.path))
+      return res.status(404).json({ error: "Video file not on disk" });
+
+    const fps = Math.min(30, Math.max(1, parseFloat(req.body.fps) || 1));
+    const frameDir = path.join(UPLOAD_DIR, `frames_${file.id}`);
+
+    const { frames, durationSec } = await extractFrames(file.path, frameDir, fps);
+
+    // Count existing frames for this task so new ones are appended
+    const existingCount = file.taskId
+      ? await fileRepo.count({ where: { taskId: file.taskId } })
+      : 0;
+
+    const saved: FileEntity[] = [];
+    for (let i = 0; i < frames.length; i++) {
+      const framePath = frames[i];
+      const fileName  = path.basename(framePath);
+      const record = fileRepo.create({
+        originalName: fileName,
+        fileName,
+        mimeType:    "image/jpeg",
+        size:        fs.statSync(framePath).size,
+        path:        framePath,
+        url:         `/uploads/frames_${file.id}/${fileName}`,
+        frameNumber: existingCount + i,
+        status:      "completed",
+        taskId:      file.taskId  ?? null,
+        projectId:   file.projectId ?? null,
+      });
+      saved.push(await fileRepo.save(record));
+    }
+
+    // Update task frame count and thumbnail
+    if (file.taskId) {
+      const task = await taskRepo.findOne({ where: { id: file.taskId } });
+      if (task) {
+        task.frameCount = existingCount + frames.length;
+        if (!task.thumbnailUrl && saved[0]?.url) task.thumbnailUrl = saved[0].url;
+        await taskRepo.save(task);
+
+        const jobs = await jobRepo.find({ where: { taskId: file.taskId } });
+        if (jobs.length > 0) {
+          jobs[0].frameEnd = task.frameCount - 1;
+          await jobRepo.save(jobs[0]);
+        }
+      }
+    }
+
+    res.json({
+      framesExtracted: frames.length,
+      durationSec,
+      fps,
+      files: saved,
+    });
+  } catch (error: any) {
+    console.error("Frame extraction error:", error);
+    res.status(500).json({ error: error.message || "Frame extraction failed" });
   }
 });
 
