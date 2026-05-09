@@ -215,6 +215,11 @@ export default function AnnotationEditor() {
     return () => window.removeEventListener('keydown', handler);
   }, [viewMode, selectedCuboidId]);
 
+  // Auto-switch to Objects tab when something gets selected on canvas
+  useEffect(() => {
+    if (selectedShapeId && viewMode === '2d') setActiveTab('objects');
+  }, [selectedShapeId, viewMode]);
+
   // Frame navigation
   const goToFrame = useCallback(async (n: number) => {
     const clamped = Math.max(0, Math.min(n, files.length - 1));
@@ -638,7 +643,7 @@ export default function AnnotationEditor() {
         <div style={{ width: 48, background: '#fff', borderRight: '1px solid #e8e8e8', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '8px 0', gap: 2, flexShrink: 0 }}>
           {viewMode === '2d' ? (
             (Object.keys(TOOL_ICONS) as ToolType[]).map(tool => (
-              <button key={tool} title={`${TOOL_LABELS[tool]} (${TOOL_KEYS[tool]})`}
+              <button key={tool} title={tool === 'select' ? 'Select (S) — click a shape to select it, drag to move, drag handles to resize' : `${TOOL_LABELS[tool]} (${TOOL_KEYS[tool]})`}
                 style={{ width: 36, height: 36, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: currentTool === tool ? '#e6f4ff' : 'transparent', color: currentTool === tool ? '#1890ff' : '#595959', transition: 'all 0.15s', position: 'relative' }}
                 onClick={() => setTool(tool)}>
                 {TOOL_ICONS[tool]}
@@ -821,6 +826,38 @@ export default function AnnotationEditor() {
                 style={{ width: 26, height: 26, border: '1px solid #d9d9d9', borderRadius: 4, background: allHidden ? '#f5f5f5' : '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: allHidden ? '#bfbfbf' : '#8c8c8c', fontSize: 13 }}>
                 {allHidden ? '🙈' : '👁'}
               </button>
+            </div>
+          )}
+
+          {/* Selected shape card — shows when a 2D shape is selected */}
+          {selectedShape && viewMode === '2d' && (
+            <div style={{ margin: '8px 8px 0', padding: '10px 12px', background: '#e6f4ff', border: '1px solid #91caff', borderRadius: 8, flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <div style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0, background: labels.find(l => l.name === selectedShape.label)?.color || '#1890ff' }} />
+                <span style={{ flex: 1, fontWeight: 600, fontSize: 13, color: '#1890ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {selectedShape.type} — {selectedShape.label}
+                </span>
+                <button onClick={() => { deleteShape(selectedShapeId!); }} title="Delete shape"
+                  style={{ border: 'none', background: '#fff1f0', borderRadius: 4, color: '#ff4d4f', cursor: 'pointer', padding: '2px 8px', fontSize: 12, fontWeight: 600 }}>
+                  Delete
+                </button>
+                <button onClick={() => selectShape(null)} title="Deselect"
+                  style={{ border: 'none', background: '#f0f0f0', borderRadius: 4, color: '#595959', cursor: 'pointer', padding: '2px 6px', fontSize: 13 }}>
+                  ✕
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: '#595959', lineHeight: 1.5 }}>
+                Drag shape body to <b>move</b> · Drag corner handles to <b>resize</b><br/>
+                Click a label below to <b>reassign</b>
+              </div>
+            </div>
+          )}
+
+          {/* Hint when select tool active but nothing drawn yet */}
+          {currentTool === 'select' && shapes.length === 0 && viewMode === '2d' && (
+            <div style={{ margin: '8px 8px 0', padding: '10px 12px', background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 8, fontSize: 12, color: '#874d00', flexShrink: 0 }}>
+              <b>Select tool active</b><br/>
+              No shapes on this frame yet. Use Rectangle (R), Polygon (P), or other drawing tools to create shapes, then switch back to Select to move or resize them.
             </div>
           )}
 

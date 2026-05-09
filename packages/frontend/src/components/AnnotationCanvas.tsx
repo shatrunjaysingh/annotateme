@@ -185,10 +185,20 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
         const w = Math.abs(br.x - tl.x), h = Math.abs(br.y - tl.y);
         ctx.fillStyle = hexToRgba(color, isSelected ? effectiveSelectedOpacity : effectiveFill);
         ctx.fillRect(x, y, w, h);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = isSelected ? 2.5 / scale : 1.5 / scale;
-        if (isSelected) { ctx.setLineDash([6 / scale, 3 / scale]); }
-        ctx.strokeRect(x, y, w, h);
+        if (isSelected) {
+          // Solid outer glow ring
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 / scale; ctx.setLineDash([]);
+          ctx.strokeRect(x, y, w, h);
+          ctx.strokeStyle = color; ctx.lineWidth = 2 / scale;
+          ctx.strokeRect(x, y, w, h);
+          ctx.setLineDash([5 / scale, 3 / scale]);
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / scale;
+          ctx.strokeRect(x, y, w, h);
+          ctx.setLineDash([]);
+        } else {
+          ctx.strokeStyle = color; ctx.lineWidth = 1.5 / scale;
+          ctx.strokeRect(x, y, w, h);
+        }
         ctx.setLineDash([]);
         // Handles
         if (isSelected) {
@@ -213,10 +223,14 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
         ctx.closePath();
         ctx.fillStyle = hexToRgba(color, isSelected ? effectiveSelectedOpacity : effectiveFill);
         ctx.fill();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = isSelected ? 2.5 / scale : 1.5 / scale;
-        if (isSelected) ctx.setLineDash([6 / scale, 3 / scale]);
-        ctx.stroke();
+        if (isSelected) {
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 / scale; ctx.setLineDash([]); ctx.stroke();
+          ctx.strokeStyle = color; ctx.lineWidth = 2 / scale; ctx.stroke();
+          ctx.setLineDash([5 / scale, 3 / scale]);
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / scale; ctx.stroke();
+        } else {
+          ctx.strokeStyle = color; ctx.lineWidth = 1.5 / scale; ctx.stroke();
+        }
         ctx.setLineDash([]);
         // Vertices
         shape.points.forEach(pt => {
@@ -256,10 +270,12 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
       } else if (shape.type === 'polyline' && shape.points.length >= 2) {
         ctx.beginPath();
         shape.points.forEach((pt, i) => i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
-        ctx.strokeStyle = color;
-        ctx.lineWidth = isSelected ? 2.5 / scale : 1.5 / scale;
-        if (isSelected) ctx.setLineDash([6 / scale, 3 / scale]);
-        ctx.stroke();
+        if (isSelected) {
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 4 / scale; ctx.setLineDash([]); ctx.stroke();
+          ctx.strokeStyle = color; ctx.lineWidth = 2.5 / scale; ctx.stroke();
+        } else {
+          ctx.strokeStyle = color; ctx.lineWidth = 1.5 / scale; ctx.stroke();
+        }
         ctx.setLineDash([]);
         shape.points.forEach(pt => {
           ctx.beginPath();
@@ -282,10 +298,14 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
         ctx.ellipse(c.x, c.y, Math.abs(r.x), Math.abs(r.y), 0, 0, Math.PI * 2);
         ctx.fillStyle = hexToRgba(color, isSelected ? effectiveSelectedOpacity : effectiveFill);
         ctx.fill();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = isSelected ? 2.5 / scale : 1.5 / scale;
-        if (isSelected) ctx.setLineDash([6 / scale, 3 / scale]);
-        ctx.stroke();
+        if (isSelected) {
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 / scale; ctx.setLineDash([]); ctx.stroke();
+          ctx.strokeStyle = color; ctx.lineWidth = 2 / scale; ctx.stroke();
+          ctx.setLineDash([5 / scale, 3 / scale]);
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / scale; ctx.stroke();
+        } else {
+          ctx.strokeStyle = color; ctx.lineWidth = 1.5 / scale; ctx.stroke();
+        }
         ctx.setLineDash([]);
         if (isSelected) {
           getShapeHandles(shape).forEach(h => {
