@@ -16,43 +16,37 @@ interface PCDHeader {
 
 const MAX_POINTS = 1_000_000;
 
-// ─── LZ4 block decompression ──────────────────────────────────────────────────
-// binary_compressed PCD embeds a raw LZ4 block (no frame header).
-// Spec: https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md
-function lz4DecompressBlock(src: Buffer, uncompressedSize: number): Buffer {
+// ─── LZF block decompression ──────────────────────────────────────────────────
+// PCL's binary_compressed PCD uses liblzf (Marc A. Lehmann's LZF algorithm).
+// Reference: https://github.com/nemequ/liblzf/blob/master/lzf_d.c
+function lzfDecompress(src: Buffer, uncompressedSize: number): Buffer {
   const dst = Buffer.allocUnsafe(uncompressedSize);
   let si = 0; // read cursor in src
   let di = 0; // write cursor in dst
 
-  while (si < src.length) {
-    const token = src[si++];
+  while (di < uncompressedSize && si < src.length) {
+    const ctrl = src[si++];
 
-    // ── Literals ──────────────────────────────────────────────────────────────
-    let litLen = token >>> 4;
-    if (litLen === 0xf) {
-      let extra: number;
-      do { extra = src[si++]; litLen += extra; } while (extra === 0xff);
+    if (ctrl < 32) {
+      // Literal run: copy ctrl+1 bytes directly
+      const count = ctrl + 1;
+      src.copy(dst, di, si, si + count);
+      si += count;
+      di += count;
+    } else {
+      // Back-reference
+      let len = ctrl >> 5;                  // upper 3 bits
+      const refHigh = (ctrl & 0x1f) << 8;  // lower 5 bits shifted up
+
+      if (len === 7) len += src[si++];      // extended length
+      const refLow = src[si++];
+      const offset = refHigh + refLow + 1;
+      let ref = di - offset;
+      len += 2; // minimum match length is 3
+
+      // Byte-by-byte to handle overlapping back-references
+      for (let i = 0; i < len; i++) dst[di++] = dst[ref++];
     }
-    src.copy(dst, di, si, si + litLen);
-    si += litLen;
-    di += litLen;
-
-    if (si >= src.length) break; // last sequence has no match
-
-    // ── Match ─────────────────────────────────────────────────────────────────
-    const offset = src[si] | (src[si + 1] << 8);
-    si += 2;
-    if (offset === 0) throw new Error('LZ4: invalid offset 0');
-
-    let matchLen = (token & 0xf) + 4;
-    if ((token & 0xf) === 0xf) {
-      let extra: number;
-      do { extra = src[si++]; matchLen += extra; } while (extra === 0xff);
-    }
-
-    // Copy match — must go byte-by-byte to handle overlapping back-references
-    let mp = di - offset;
-    for (let i = 0; i < matchLen; i++) dst[di++] = dst[mp++];
   }
 
   return dst.slice(0, di);
@@ -227,7 +221,7 @@ export function parsePCD(buffer: Buffer): ParsedPointCloud {
   const uncompressedSize = raw.readUInt32LE(4);
   const compressed       = raw.slice(8, 8 + compressedSize);
 
-  const decompressed = lz4DecompressBlock(compressed, uncompressedSize);
+  const decompressed = lzfDecompress(compressed, uncompressedSize);
 
   // Build column byte-offsets: each field occupies (size × count × numPoints) bytes
   const colFieldOffset: number[] = [];
