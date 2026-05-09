@@ -13,7 +13,7 @@ upstream grafana {
 
 server {
     listen 80;
-    server_name _;
+    server_name ${NGINX_SERVER_NAME};
 
     # Gzip compression
     gzip on;

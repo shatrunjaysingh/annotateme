@@ -64,7 +64,12 @@ export default function Login() {
             <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Enter your email" required autoFocus={!isRegister} />
           </div>
           <div className="form-group">
-            <label className="form-label required">Password</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label className="form-label required" style={{ margin: 0 }}>Password</label>
+              {!isRegister && (
+                <Link to="/forgot-password" style={{ fontSize: 12, color: '#1890ff', textDecoration: 'none' }}>Forgot password?</Link>
+              )}
+            </div>
             <input className="input" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" required />
           </div>
           {error && <div style={styles.error}>{error}</div>}

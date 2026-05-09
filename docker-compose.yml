@@ -80,6 +80,8 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_BUCKET: annotateme
       UPLOAD_DIR: /app/uploads
+      APP_DOMAIN: ${APP_DOMAIN:-}
+      ALLOWED_ORIGINS: ${APP_DOMAIN:+https://${APP_DOMAIN}}${ALLOWED_ORIGINS:-http://localhost:4200}
     ports:
       - "3000:3000"
     depends_on:
@@ -106,6 +108,34 @@ services:
       - annotateme
     restart: unless-stopped
 
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: annotateme_grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SERVER_DOMAIN: ${APP_DOMAIN:-localhost}
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      DB_USER: ${DB_USER:-annotateme}
+      DB_PASSWORD: ${DB_PASSWORD:-annotateme}
+      DB_NAME: ${DB_NAME:-annotateme}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - annotateme
+    restart: unless-stopped
+
   nginx:
     build:
       context: ./nginx
@@ -113,11 +143,15 @@ services:
     container_name: annotateme_nginx
     ports:
       - "80:80"
+    environment:
+      # _ = catch-all (works for localhost). Set APP_DOMAIN to your domain for production.
+      NGINX_SERVER_NAME: ${APP_DOMAIN:-_}
     volumes:
       - uploads_data:/app/uploads:ro
     depends_on:
       - backend
       - frontend
+      - grafana
     networks:
       - annotateme
     restart: unless-stopped
@@ -127,6 +161,7 @@ volumes:
   redis_data:
   minio_data:
   uploads_data:
+  grafana_data:
 
 networks:
   annotateme:

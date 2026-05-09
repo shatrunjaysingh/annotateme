@@ -126,6 +126,7 @@ export default function PointCloudCanvas({
   const controlsRef   = useRef<OrbitControls | null>(null);
   const pointsObjRef  = useRef<THREE.Points | null>(null);
   const cuboidsGrpRef = useRef(new THREE.Group());
+  const gridRef        = useRef<THREE.GridHelper | null>(null);
 
   // Drawing a new cuboid via drag
   const drawRef = useRef<{
@@ -156,9 +157,10 @@ export default function PointCloudCanvas({
 
     const scene = sceneRef.current;
 
-    // Grid (XZ plane)
-    const grid = new THREE.GridHelper(60, 30, 0x333333, 0x2a2a2a);
+    // Grid (XZ plane) — repositioned to data floor when real data loads
+    const grid = new THREE.GridHelper(200, 50, 0x333333, 0x2a2a2a);
     scene.add(grid);
+    gridRef.current = grid;
 
     // Axes helper (tiny)
     const axes = new THREE.AxesHelper(3);
@@ -210,7 +212,7 @@ export default function PointCloudCanvas({
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-    const mat = new THREE.PointsMaterial({ size: 0.06, vertexColors: true, sizeAttenuation: true });
+    const mat = new THREE.PointsMaterial({ size: 2, vertexColors: true, sizeAttenuation: false });
     const pts = new THREE.Points(geo, mat);
     scene.add(pts);
     pointsObjRef.current = pts;
@@ -235,12 +237,59 @@ export default function PointCloudCanvas({
   useEffect(() => {
     if (!points || !pointsObjRef.current) return;
     const geo = pointsObjRef.current.geometry as THREE.BufferGeometry;
-    geo.setAttribute('position', new THREE.BufferAttribute(points, 3));
+
+    // Remap PCD Z-up (x=fwd, y=lateral, z=height) → Three.js Y-up
+    const n = points.length / 3;
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      pos[i*3]   = points[i*3];    // PCD x → Three.js x
+      pos[i*3+1] = points[i*3+2]; // PCD z → Three.js y (up)
+      pos[i*3+2] = points[i*3+1]; // PCD y → Three.js z
+    }
+
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+    // Center at origin so the default camera always sees the data
+    geo.center();
     geo.computeBoundingBox();
+
     if (pointColors && pointColors.length === points.length) {
       geo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
     }
-    geo.attributes.position.needsUpdate = true;
+
+    if (geo.boundingBox) {
+      const size = new THREE.Vector3();
+      geo.boundingBox.getSize(size);
+      const hRadius = Math.max(size.x, size.z) * 0.8; // horizontal half-extent
+
+      // Reset perspective camera to a clean above-and-behind position
+      perspCam.current.position.set(hRadius * 0.6, hRadius * 0.5, hRadius);
+      perspCam.current.lookAt(0, 0, 0);
+      if (controlsRef.current) {
+        controlsRef.current.target.set(0, 0, 0);
+        controlsRef.current.update();
+      }
+
+      // Snap grid to data floor
+      if (gridRef.current) gridRef.current.position.y = geo.boundingBox.min.y;
+
+      // Ortho sub-views: top looks down (XZ plane), side looks along X, front along Z
+      topCam.current.position.set(0, 500, 0);
+      topCam.current.up.set(0, 0, -1);
+      topCam.current.lookAt(0, 0, 0);
+
+      sideCam.current.position.set(500, 0, 0);
+      sideCam.current.up.set(0, 1, 0);
+      sideCam.current.lookAt(0, 0, 0);
+
+      frontCam.current.position.set(0, 0, 500);
+      frontCam.current.up.set(0, 1, 0);
+      frontCam.current.lookAt(0, 0, 0);
+
+      (topCam.current   as any)._orthoSize = Math.max(size.x, size.z) * 0.55;
+      (sideCam.current  as any)._orthoSize = Math.max(size.x, size.y) * 0.55;
+      (frontCam.current as any)._orthoSize = Math.max(size.z, size.y) * 0.55;
+    }
   }, [points, pointColors]);
 
   // ─── Rebuild cuboid meshes when cuboids / selection changes ───────────
