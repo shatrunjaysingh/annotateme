@@ -217,7 +217,7 @@ router.get("/:projectId/stats", async (req: AuthRequest, res) => {
 router.post("/:projectId/create", async (req: AuthRequest, res) => {
   try {
     const projectId = req.params.projectId;
-    const { name, description, color, category, type, attributes } = req.body;
+    const { name, description, color, category, type, attributes, metadata } = req.body;
 
     if (!name) {
       return res.status(400).json({ error: "Label name is required" });
@@ -244,6 +244,7 @@ router.post("/:projectId/create", async (req: AuthRequest, res) => {
       category: category || "general",
       type: type || "any",
       attributes: attributes || [],
+      metadata: metadata || null,
       source: "user_created",
       project: { id: projectId } as any,
     });
@@ -264,6 +265,7 @@ router.post("/:projectId/create", async (req: AuthRequest, res) => {
         color: saved.color,
         type: saved.type,
         attributes: saved.attributes,
+        metadata: saved.metadata,
         source: saved.source,
       },
     });
@@ -277,7 +279,7 @@ router.post("/:projectId/create", async (req: AuthRequest, res) => {
 router.patch("/:projectId/labels/:labelId", async (req: AuthRequest, res) => {
   try {
     const { labelId } = req.params;
-    const { name, description, color, category, type, attributes } = req.body;
+    const { name, description, color, category, type, attributes, metadata } = req.body;
 
     const label = await labelRepository.findOne({ where: { id: labelId } });
     if (!label) {
@@ -290,6 +292,7 @@ router.patch("/:projectId/labels/:labelId", async (req: AuthRequest, res) => {
     if (category) label.category = category;
     if (type) label.type = type;
     if (attributes !== undefined) label.attributes = attributes;
+    if (metadata !== undefined) label.metadata = metadata;
 
     const updated = await labelRepository.save(label);
 
@@ -301,6 +304,7 @@ router.patch("/:projectId/labels/:labelId", async (req: AuthRequest, res) => {
         color: updated.color,
         type: updated.type,
         attributes: updated.attributes,
+        metadata: updated.metadata,
         source: updated.source,
       },
     });

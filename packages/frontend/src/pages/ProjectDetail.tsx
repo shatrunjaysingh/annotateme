@@ -57,11 +57,15 @@ interface LabelAttribute {
   default_value?: string;
 }
 
+interface SkeletonPoint { id: number; name: string; x: number; y: number; }
+interface SkeletonDef { points: SkeletonPoint[]; edges: [number, number][]; }
+
 interface LabelForm {
   name: string;
   type: string;
   color: string;
   attributes: LabelAttribute[];
+  skeleton?: SkeletonDef;
 }
 
 interface LabelRecord {
@@ -70,6 +74,7 @@ interface LabelRecord {
   type: string;
   color: string;
   attributes: LabelAttribute[];
+  metadata?: { skeleton?: SkeletonDef } | null;
 }
 
 function timeAgo(d: string) {
@@ -154,6 +159,10 @@ export default function ProjectDetail() {
   const [labelForm, setLabelForm] = useState<LabelForm>({ name: '', type: 'any', color: '#1890ff', attributes: [] });
   const [editingLabel, setEditingLabel] = useState<LabelRecord | null>(null);
   const [projectLabels, setProjectLabels] = useState<LabelRecord[]>([]);
+  const [showSkeletonModal, setShowSkeletonModal] = useState(false);
+  const [skeletonTargetLabel, setSkeletonTargetLabel] = useState<LabelRecord | null>(null);
+  const [skeletonDef, setSkeletonDef] = useState<SkeletonDef>({ points: [], edges: [] });
+  const [skeletonConnecting, setSkeletonConnecting] = useState<number | null>(null);
 
   const [taskForm, setTaskForm] = useState({ name: '', subset: 'Train', assigneeId: '' });
   const [jobForm, setJobForm] = useState({ jobType: 'Ground truth', frameSelection: 'Random', quantity: 5, frameCount: 1, seed: '' });
@@ -260,6 +269,70 @@ export default function ProjectDetail() {
       await client.delete(`/labels/${id}/labels/${labelId}`);
       loadLabels(); load();
     } catch { /* no-op */ }
+  };
+
+  const openSkeletonModal = (lbl?: LabelRecord) => {
+    const target = lbl || null;
+    setSkeletonTargetLabel(target);
+    const existing = target?.metadata?.skeleton;
+    setSkeletonDef(existing ? { points: [...existing.points], edges: [...existing.edges] } : { points: [], edges: [] });
+    setSkeletonConnecting(null);
+    setShowSkeletonModal(true);
+  };
+
+  const skeletonAddPoint = () => {
+    const id = skeletonDef.points.length > 0 ? Math.max(...skeletonDef.points.map(p => p.id)) + 1 : 0;
+    const angle = (skeletonDef.points.length * 45 * Math.PI) / 180;
+    const cx = 0.5 + 0.35 * Math.cos(angle);
+    const cy = 0.5 + 0.35 * Math.sin(angle);
+    setSkeletonDef(d => ({ ...d, points: [...d.points, { id, name: `point_${id}`, x: cx, y: cy }] }));
+  };
+
+  const skeletonRemovePoint = (pid: number) => {
+    setSkeletonDef(d => ({
+      points: d.points.filter(p => p.id !== pid),
+      edges: d.edges.filter(([a, b]) => a !== pid && b !== pid),
+    }));
+    if (skeletonConnecting === pid) setSkeletonConnecting(null);
+  };
+
+  const skeletonClickPoint = (pid: number) => {
+    if (skeletonConnecting === null) {
+      setSkeletonConnecting(pid);
+    } else if (skeletonConnecting === pid) {
+      setSkeletonConnecting(null);
+    } else {
+      const a = Math.min(skeletonConnecting, pid);
+      const b = Math.max(skeletonConnecting, pid);
+      const exists = skeletonDef.edges.some(([ea, eb]) => ea === a && eb === b);
+      setSkeletonDef(d => ({
+        ...d,
+        edges: exists ? d.edges.filter(([ea, eb]) => !(ea === a && eb === b)) : [...d.edges, [a, b]],
+      }));
+      setSkeletonConnecting(null);
+    }
+  };
+
+  const handleSaveSkeleton = async () => {
+    if (!id) return;
+    setSaving(true);
+    try {
+      const metadata = { skeleton: skeletonDef };
+      if (skeletonTargetLabel) {
+        await client.patch(`/labels/${id}/labels/${skeletonTargetLabel.id}`, {
+          type: 'skeleton', metadata,
+        });
+      } else {
+        await client.post(`/labels/${id}/create`, {
+          name: 'skeleton', type: 'skeleton', color: '#722ed1',
+          attributes: [], metadata,
+        });
+      }
+      setShowSkeletonModal(false);
+      loadLabels();
+    } catch (e: any) {
+      alert(e?.response?.data?.error || 'Failed to save skeleton');
+    } finally { setSaving(false); }
   };
 
   const addAttribute = () => {
@@ -605,14 +678,11 @@ export default function ProjectDetail() {
                     Add label
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                   </button>
-                  <button
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', border: '1px solid #d9d9d9', borderRadius: 6, background: '#fff', cursor: 'not-allowed', fontSize: 13, color: '#8c8c8c' }}>
+                  <button onClick={() => openSkeletonModal()}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', border: '1px solid #d9d9d9', borderRadius: 6, background: '#fff', cursor: 'pointer', fontSize: 13, color: '#262626' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '#fff')}>
                     Setup skeleton
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                  </button>
-                  <button
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', border: '1px solid #d9d9d9', borderRadius: 6, background: '#fff', cursor: 'not-allowed', fontSize: 13, color: '#8c8c8c' }}>
-                    From model
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                   </button>
                   {/* Existing labels as chips */}
@@ -621,6 +691,7 @@ export default function ProjectDetail() {
                       <span style={{ width: 10, height: 10, borderRadius: '50%', background: lbl.color || '#1890ff', flexShrink: 0 }} />
                       {lbl.name}
                       {lbl.type && lbl.type !== 'any' && <span style={{ fontSize: 10, color: '#8c8c8c', marginLeft: 2 }}>({lbl.type})</span>}
+                      {lbl.type === 'skeleton' && <button onClick={() => openSkeletonModal(lbl)} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 2px', color: '#722ed1', fontSize: 11, lineHeight: 1 }} title="Edit skeleton">⬡</button>}
                       <button onClick={() => openEditLabel(lbl)} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 2px', color: '#8c8c8c', fontSize: 11, lineHeight: 1 }} title="Edit">✎</button>
                       <button onClick={() => handleDeleteLabel(lbl.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 2px', color: '#ff4d4f', fontSize: 11, lineHeight: 1 }} title="Delete">✕</button>
                     </span>
@@ -755,6 +826,156 @@ export default function ProjectDetail() {
           }>
           <LabelFormUI form={labelForm} onChange={setLabelForm} onAddAttr={addAttribute} onUpdateAttr={updateAttribute} onRemoveAttr={removeAttribute} />
         </Modal>
+      )}
+
+      {showSkeletonModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, width: 820, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid #f0f0f0' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 16 }}>Setup Skeleton{skeletonTargetLabel ? `: ${skeletonTargetLabel.name}` : ''}</div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 2 }}>Define keypoints and connections. Click a point then another to connect/disconnect.</div>
+              </div>
+              <button onClick={() => setShowSkeletonModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, color: '#8c8c8c', lineHeight: 1 }}>✕</button>
+            </div>
+
+            {/* Body */}
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              {/* Left: keypoint list */}
+              <div style={{ width: 220, borderRight: '1px solid #f0f0f0', padding: 16, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Keypoints ({skeletonDef.points.length})</div>
+                {skeletonDef.points.map(pt => (
+                  <div key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderRadius: 6, background: skeletonConnecting === pt.id ? '#f0e6ff' : '#fafafa', border: `1px solid ${skeletonConnecting === pt.id ? '#722ed1' : '#e8e8e8'}` }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#722ed1', flexShrink: 0 }} />
+                    <input
+                      value={pt.name}
+                      onChange={e => setSkeletonDef(d => ({ ...d, points: d.points.map(p => p.id === pt.id ? { ...p, name: e.target.value } : p) }))}
+                      style={{ flex: 1, border: 'none', background: 'none', fontSize: 12, outline: 'none', minWidth: 0 }}
+                    />
+                    <button onClick={() => skeletonRemovePoint(pt.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#ff4d4f', fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
+                  </div>
+                ))}
+                <button onClick={skeletonAddPoint}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '6px', border: '1px dashed #d9d9d9', borderRadius: 6, background: '#fff', cursor: 'pointer', fontSize: 12, color: '#595959' }}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = '#722ed1')}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = '#d9d9d9')}>
+                  + Add keypoint
+                </button>
+                <div style={{ marginTop: 12, fontSize: 11, color: '#8c8c8c' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Edges ({skeletonDef.edges.length})</div>
+                  {skeletonDef.edges.map(([a, b], i) => {
+                    const pa = skeletonDef.points.find(p => p.id === a);
+                    const pb = skeletonDef.points.find(p => p.id === b);
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                        <span style={{ flex: 1 }}>{pa?.name} – {pb?.name}</span>
+                        <button onClick={() => setSkeletonDef(d => ({ ...d, edges: d.edges.filter((_, ei) => ei !== i) }))}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#ff4d4f', fontSize: 11, padding: 0 }}>✕</button>
+                      </div>
+                    );
+                  })}
+                  {skeletonDef.edges.length === 0 && <span style={{ color: '#bfbfbf' }}>No connections yet</span>}
+                </div>
+              </div>
+
+              {/* Right: visual canvas */}
+              <div style={{ flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 12, color: '#8c8c8c' }}>
+                  {skeletonConnecting !== null
+                    ? `Connecting from "${skeletonDef.points.find(p => p.id === skeletonConnecting)?.name}" — click another point to connect/disconnect, or click same to cancel`
+                    : 'Click a point to start connecting. Drag points to reposition them.'}
+                </div>
+                <div style={{ flex: 1, position: 'relative', border: '1px solid #e8e8e8', borderRadius: 8, background: '#fafafa', overflow: 'hidden' }}>
+                  <svg
+                    width="100%" height="100%"
+                    viewBox="0 0 400 360"
+                    style={{ display: 'block' }}
+                    onMouseMove={e => {
+                      // drag support via data attribute
+                      const dragging = (e.currentTarget as any)._dragging;
+                      if (dragging == null) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const nx = (e.clientX - rect.left) / rect.width;
+                      const ny = (e.clientY - rect.top) / rect.height;
+                      setSkeletonDef(d => ({ ...d, points: d.points.map(p => p.id === dragging ? { ...p, x: Math.max(0.05, Math.min(0.95, nx)), y: Math.max(0.05, Math.min(0.95, ny)) } : p) }));
+                    }}
+                    onMouseUp={e => { (e.currentTarget as any)._dragging = null; }}
+                    onMouseLeave={e => { (e.currentTarget as any)._dragging = null; }}>
+
+                    {/* Edges */}
+                    {skeletonDef.edges.map(([a, b], i) => {
+                      const pa = skeletonDef.points.find(p => p.id === a);
+                      const pb = skeletonDef.points.find(p => p.id === b);
+                      if (!pa || !pb) return null;
+                      return <line key={i} x1={pa.x * 400} y1={pa.y * 360} x2={pb.x * 400} y2={pb.y * 360} stroke="#722ed1" strokeWidth={2} strokeOpacity={0.7} />;
+                    })}
+
+                    {/* Points */}
+                    {skeletonDef.points.map(pt => (
+                      <g key={pt.id}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => skeletonClickPoint(pt.id)}
+                        onMouseDown={e => { e.stopPropagation(); (e.currentTarget.closest('svg') as any)._dragging = pt.id; }}>
+                        <circle cx={pt.x * 400} cy={pt.y * 360} r={skeletonConnecting === pt.id ? 12 : 9}
+                          fill={skeletonConnecting === pt.id ? '#722ed1' : '#fff'}
+                          stroke="#722ed1" strokeWidth={2} />
+                        <text x={pt.x * 400} y={pt.y * 360 - 13} textAnchor="middle" fontSize={10} fill="#434343">{pt.name}</text>
+                      </g>
+                    ))}
+
+                    {skeletonDef.points.length === 0 && (
+                      <text x={200} y={185} textAnchor="middle" fontSize={13} fill="#bfbfbf">Add keypoints from the left panel</text>
+                    )}
+                  </svg>
+                </div>
+
+                {/* Label name field when creating new */}
+                {!skeletonTargetLabel && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 13, color: '#595959', whiteSpace: 'nowrap' }}>Label name:</span>
+                    <input
+                      id="skeleton-label-name"
+                      defaultValue="skeleton"
+                      style={{ flex: 1, padding: '5px 10px', border: '1px solid #d9d9d9', borderRadius: 6, fontSize: 13 }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 24px', borderTop: '1px solid #f0f0f0' }}>
+              <button onClick={() => setShowSkeletonModal(false)}
+                style={{ padding: '7px 18px', border: '1px solid #d9d9d9', borderRadius: 6, background: '#fff', cursor: 'pointer', fontSize: 13 }}>
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!skeletonTargetLabel) {
+                    const nameEl = document.getElementById('skeleton-label-name') as HTMLInputElement;
+                    const labelName = nameEl?.value?.trim() || 'skeleton';
+                    if (!id) return;
+                    setSaving(true);
+                    try {
+                      await client.post(`/labels/${id}/create`, {
+                        name: labelName, type: 'skeleton', color: '#722ed1',
+                        attributes: [], metadata: { skeleton: skeletonDef },
+                      });
+                      setShowSkeletonModal(false); loadLabels();
+                    } catch (e: any) { alert(e?.response?.data?.error || 'Failed to save'); }
+                    finally { setSaving(false); }
+                  } else {
+                    handleSaveSkeleton();
+                  }
+                }}
+                disabled={saving}
+                style={{ padding: '7px 18px', border: 'none', borderRadius: 6, background: '#722ed1', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600 }}>
+                {saving ? 'Saving…' : (skeletonTargetLabel ? 'Update Skeleton' : 'Create Skeleton Label')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
