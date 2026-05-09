@@ -237,9 +237,12 @@ export default function AnnotationEditor() {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      const toolMap: Record<string, ToolType> = { s: 'select', r: 'rect', p: 'polygon', l: 'polyline', d: 'point', e: 'ellipse' };
-      const tool = toolMap[e.key.toLowerCase()];
-      if (tool) setTool(tool);
+      // 2D tool keys only fire in 2D mode (avoids conflict with 3D nudge keys)
+      if (viewMode === '2d') {
+        const toolMap: Record<string, ToolType> = { s: 'select', r: 'rect', p: 'polygon', l: 'polyline', d: 'point', e: 'ellipse' };
+        const tool = toolMap[e.key.toLowerCase()];
+        if (tool) setTool(tool);
+      }
       if (e.key === 'ArrowLeft') goToFrame(frameNum - 1);
       if (e.key === 'ArrowRight') goToFrame(frameNum + 1);
       if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveAnnotations(); }
@@ -247,7 +250,7 @@ export default function AnnotationEditor() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [setTool, goToFrame, saveAnnotations, frameNum]);
+  }, [viewMode, setTool, goToFrame, saveAnnotations, frameNum]);
 
   // Click outside menu
   useEffect(() => {
@@ -718,7 +721,7 @@ export default function AnnotationEditor() {
                 colorBy={colorBy}
                 selectedCuboidId={selectedCuboidId}
                 cuboidOrientation={cuboidOrientation}
-                onAddCuboid={c => setCuboids(prev => [...prev, c])}
+                onAddCuboid={c => { setCuboids(prev => [...prev, c]); setSelectedCuboidId(c.id); }}
                 onSelectCuboid={setSelectedCuboidId}
                 subViewHeight={200}
                 expandedView={expandedView}

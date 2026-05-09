@@ -123,6 +123,9 @@ export default function PointCloudCanvas({
     active: false, view: 'top', lastX: 0, lastY: 0,
   });
 
+  // Track mousedown position in perspective view to distinguish click vs drag
+  const perspClickRef = useRef<{ x: number; y: number } | null>(null);
+
   // Current tool/label in a ref so mouse handlers are never stale
   const toolRef  = useRef({ currentTool, selectedLabel, selectedLabelColor });
   toolRef.current = { currentTool, selectedLabel, selectedLabelColor };
@@ -408,6 +411,12 @@ export default function PointCloudCanvas({
     if (e.button !== 0) return;
     const vp = whichViewport(e.clientX, e.clientY);
     const { currentTool: tool } = toolRef.current;
+    // Track click start in perspective view for click-to-select
+    if (vp === 'perspective') {
+      perspClickRef.current = { x: e.clientX, y: e.clientY };
+    } else {
+      perspClickRef.current = null;
+    }
     if (tool === 'cuboid' && vp !== 'perspective') {
       const camMap = { top: topCamRef.current, side: sideCamRef.current, front: frontCamRef.current, perspective: topCamRef.current };
       const cam = camMap[vp as keyof typeof camMap];
@@ -480,6 +489,26 @@ export default function PointCloudCanvas({
 
   const onMouseUp = useCallback((e: React.MouseEvent) => {
     panRef.current.active = false;
+
+    // Click-to-select in perspective view (drag distance < 5px = click)
+    if (perspClickRef.current) {
+      const dx = e.clientX - perspClickRef.current.x;
+      const dy = e.clientY - perspClickRef.current.y;
+      perspClickRef.current = null;
+      if (Math.sqrt(dx*dx + dy*dy) < 5 && perspCamRef.current && cuboidsGrpRef.current) {
+        const ndc = canvasNDC(e.clientX, e.clientY, 'perspective');
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, perspCamRef.current);
+        const hits = raycaster.intersectObjects(cuboidsGrpRef.current.children, true);
+        if (hits.length) {
+          let obj: THREE.Object3D | null = hits[0].object;
+          while (obj && !obj.userData['cuboidId']) obj = obj.parent;
+          if (obj) { onSelectCuboid?.(obj.userData['cuboidId']); return; }
+        }
+        onSelectCuboid?.(null);
+        return;
+      }
+    }
     if (drawRef.current.active && toolRef.current.currentTool === 'cuboid') {
       const scene = sceneRef.current;
       if (scene && drawRef.current.previewMesh) { scene.remove(drawRef.current.previewMesh); drawRef.current.previewMesh = null; }
