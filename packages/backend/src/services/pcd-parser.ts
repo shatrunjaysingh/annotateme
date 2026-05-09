@@ -125,6 +125,13 @@ function unpackRGB(packed: number, out: Float32Array, base: number) {
   out[base+2] = u[0] / 255;
 }
 
+// Normalize intensity: float fields are already 0-1; uint fields are divided by their type max.
+function normalizeIntensity(raw: number, type: string, size: number): number {
+  if (type === 'F') return Math.max(0, Math.min(1, raw));
+  const maxVal = size === 1 ? 255 : size === 2 ? 65535 : 4294967295;
+  return raw / maxVal;
+}
+
 function applyColor(
   data: Buffer, base: number,
   h: PCDHeader, ii: number, rgbi: number, rgbai: number, fieldOffset: number[],
@@ -141,7 +148,7 @@ function applyColor(
       ? fieldOffset[ii] + i * (h.sizes[ii] ?? 4)
       : base + fieldOffset[ii];
     const raw = readScalar(data, off, h.types[ii], h.sizes[ii]);
-    const n   = Math.min(1, raw / 255);
+    const n   = normalizeIntensity(raw, h.types[ii], h.sizes[ii]);
     col[i*3] = col[i*3+1] = col[i*3+2] = n;
   } else {
     heightColor(pts[i*3+1], col, i*3);
@@ -180,7 +187,7 @@ export function parsePCD(buffer: Buffer): ParsedPointCloud {
       if (rgbi !== -1 || rgbai !== -1) {
         unpackRGB(v[rgbi !== -1 ? rgbi : rgbai] ?? 0, col, i*3);
       } else if (ii !== -1) {
-        const n = Math.min(1, (v[ii] ?? 0) / 255);
+        const n = normalizeIntensity(v[ii] ?? 0, h.types[ii], h.sizes[ii]);
         col[i*3] = col[i*3+1] = col[i*3+2] = n;
       } else {
         heightColor(pts[i*3+1], col, i*3);

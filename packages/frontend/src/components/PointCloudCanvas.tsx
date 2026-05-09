@@ -210,7 +210,7 @@ export default function PointCloudCanvas({
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-    const mat = new THREE.PointsMaterial({ size: 0.06, vertexColors: true, sizeAttenuation: true });
+    const mat = new THREE.PointsMaterial({ size: 0.12, vertexColors: true, sizeAttenuation: true });
     const pts = new THREE.Points(geo, mat);
     scene.add(pts);
     pointsObjRef.current = pts;
@@ -241,6 +241,36 @@ export default function PointCloudCanvas({
       geo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
     }
     geo.attributes.position.needsUpdate = true;
+
+    // Auto-fit cameras to bounding box of real data
+    if (geo.boundingBox) {
+      const center = new THREE.Vector3();
+      const size   = new THREE.Vector3();
+      geo.boundingBox.getCenter(center);
+      geo.boundingBox.getSize(size);
+      const radius = Math.max(size.x, size.y, size.z) * 0.75;
+
+      perspCam.current.position.set(center.x + radius, center.y + radius * 0.6, center.z + radius);
+      perspCam.current.lookAt(center);
+      if (controlsRef.current) {
+        controlsRef.current.target.copy(center);
+        controlsRef.current.update();
+      }
+
+      topCam.current.position.set(center.x, center.y + 200, center.z);
+      topCam.current.up.set(0, 0, -1);
+      topCam.current.lookAt(center.x, center.y, center.z);
+
+      sideCam.current.position.set(center.x + 200, center.y, center.z);
+      sideCam.current.lookAt(center.x, center.y, center.z);
+
+      frontCam.current.position.set(center.x, center.y, center.z + 200);
+      frontCam.current.lookAt(center.x, center.y, center.z);
+
+      (topCam.current   as any)._orthoSize = radius * 1.2;
+      (sideCam.current  as any)._orthoSize = radius * 1.2;
+      (frontCam.current as any)._orthoSize = radius * 1.2;
+    }
   }, [points, pointColors]);
 
   // ─── Rebuild cuboid meshes when cuboids / selection changes ───────────
