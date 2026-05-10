@@ -72,7 +72,7 @@ export default function Login() {
             </div>
             <input className="input" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" required />
           </div>
-          {error && <div style={styles.error}>{error}</div>}
+          {error && <div data-testid="login-error" style={styles.error}>{error}</div>}
           <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: '100%', justifyContent: 'center', padding: '8px' }}>
             {loading ? <span className="spinner" /> : (isRegister ? 'Create Account' : 'Sign In')}
           </button>

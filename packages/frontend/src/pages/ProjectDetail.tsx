@@ -3,6 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import client from '../api/client';
 import Navbar from '../components/Navbar';
 import Modal from '../components/Modal';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 interface Task {
   id: string;
@@ -129,6 +131,8 @@ function MDivider() { return <div style={{ height: 1, background: '#f0f0f0', mar
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
+  const confirm = useConfirm();
 
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -264,11 +268,13 @@ export default function ProjectDetail() {
   };
 
   const handleDeleteLabel = async (labelId: string) => {
-    if (!confirm('Delete this label?')) return;
+    const ok = await confirm({ title: 'Delete label?', message: 'This label will be permanently removed from the project.', confirmLabel: 'Delete label', variant: 'danger' });
+    if (!ok) return;
     try {
       await client.delete(`/labels/${id}/labels/${labelId}`);
+      toast.success('Label deleted');
       loadLabels(); load();
-    } catch { /* no-op */ }
+    } catch { toast.error('Failed to delete label'); }
   };
 
   const openSkeletonModal = (lbl?: LabelRecord) => {
@@ -383,13 +389,14 @@ export default function ProjectDetail() {
       const [p, t] = await Promise.all([client.get(`/projects/${id}`), client.get(`/tasks?projectId=${id}`)]);
       const blob = new Blob([JSON.stringify({ project: p.data, tasks: t.data, exportedAt: new Date().toISOString() }, null, 2)]);
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `backup-${project?.name}-${Date.now()}.json`; a.click();
-    } catch { alert('Backup failed.'); }
+    } catch { toast.error('Backup failed'); }
   };
 
   const handleProjectDelete = async () => {
     setActionsOpen(false);
-    if (!confirm(`Delete project "${project?.name}" and all its tasks?`)) return;
-    try { await client.delete(`/projects/${id}`); navigate('/projects'); } catch { alert('Delete failed.'); }
+    const ok = await confirm({ title: `Delete project?`, message: `"${project?.name}" and all its tasks will be permanently deleted.`, confirmLabel: 'Delete project', variant: 'danger' });
+    if (!ok) return;
+    try { await client.delete(`/projects/${id}`); navigate('/projects'); } catch { toast.error('Delete failed'); }
   };
 
   // ── Task actions ───────────────────────────────────────────────────────
@@ -403,9 +410,10 @@ export default function ProjectDetail() {
   };
 
   const handleDeleteTask = async (taskId: string) => {
-    if (!confirm('Delete this task and all its jobs?')) return;
-    try { await client.delete(`/tasks/${taskId}`); load(); } catch { /* no-op */ }
     setTaskMenuId(null);
+    const ok = await confirm({ title: 'Delete task?', message: 'This task and all its jobs and annotations will be deleted.', confirmLabel: 'Delete task', variant: 'danger' });
+    if (!ok) return;
+    try { await client.delete(`/tasks/${taskId}`); toast.success('Task deleted'); load(); } catch { toast.error('Failed to delete task'); }
   };
 
   const handleTaskExport = async (taskId: string, name: string) => {
@@ -413,7 +421,7 @@ export default function ProjectDetail() {
     try {
       const res = await client.get(`/import-export/export?taskId=${taskId}&format=json`, { responseType: 'blob' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([res.data])); a.download = `task-${name}.json`; a.click();
-    } catch { alert('Export failed.'); }
+    } catch { toast.error('Export failed'); }
   };
 
   const handleTaskImport = (taskId: string) => { setTaskMenuId(null); importTaskRef.current[taskId]?.click(); };
@@ -458,12 +466,13 @@ export default function ProjectDetail() {
     try {
       const res = await client.get(`/jobs/${jobId}/export`, { responseType: 'blob' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([res.data])); a.download = `job-${jobId}.json`; a.click();
-    } catch { alert('Export failed.'); }
+    } catch { toast.error('Export failed'); }
   };
   const handleDeleteJob = async (jobId: string) => {
     setJobMenuId(null);
-    if (!confirm('Delete this job and its annotations?')) return;
-    try { await client.delete(`/jobs/${jobId}`); load(); } catch { alert('Delete failed.'); }
+    const ok = await confirm({ title: 'Delete job?', message: 'This job and all its annotations will be permanently deleted.', confirmLabel: 'Delete job', variant: 'danger' });
+    if (!ok) return;
+    try { await client.delete(`/jobs/${jobId}`); toast.success('Job deleted'); load(); } catch { toast.error('Failed to delete job'); }
   };
   const handleAddJob = async (taskId: string) => {
     setSaving(true);
