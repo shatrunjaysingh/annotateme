@@ -31,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.15"))
 MAX_DETECTIONS = int(os.getenv("MAX_DETECTIONS", "100"))
 
 

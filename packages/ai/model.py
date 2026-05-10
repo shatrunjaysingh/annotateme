@@ -207,7 +207,7 @@ class ProductionModel(BaseAnnotationModel):
         self,
         weights: str = "yolov8n-seg.pt",
         mode: Literal["both", "segment", "detect"] = "both",
-        conf: float = 0.35,
+        conf: float = 0.15,
         iou: float = 0.45,
         max_det: int = 100,
         rdp_epsilon: float = 2.0,
@@ -344,6 +344,9 @@ class CustomModel(BaseAnnotationModel):
 # Larger model for better accuracy:
 #   active_model = ProductionModel(weights="yolov8l-seg.pt")
 
-active_model: BaseAnnotationModel = ProductionModel()
-# active_model = MockModel()          # ← fall back to mock (no ML deps)
-# active_model = CustomModel()        # ← your own architecture
+active_model: BaseAnnotationModel = ProductionModel(weights="yolov8s-seg.pt", conf=0.15)
+# active_model = ProductionModel()                                          # nano  (~7 MB, fastest)
+# active_model = ProductionModel(weights="yolov8m-seg.pt", conf=0.15)      # medium (~52 MB, more accurate)
+# active_model = ProductionModel(weights="yolov8l-seg.pt", conf=0.15)      # large  (~88 MB, best accuracy)
+# active_model = MockModel()                                                # no ML deps, random shapes
+# active_model = CustomModel()                                              # your own architecture

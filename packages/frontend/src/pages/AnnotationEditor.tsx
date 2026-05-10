@@ -92,6 +92,8 @@ export default function AnnotationEditor() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState<'idle' | 'ok' | 'unavailable'>('idle');
   const [aiToast, setAiToast] = useState<string | null>(null);
+  const [aiConf, setAiConf] = useState(0.15);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -327,7 +329,7 @@ export default function AnnotationEditor() {
     setAiLoading(true);
     setAiToast(null);
     try {
-      const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum });
+      const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum, confidenceThreshold: aiConf });
       const newShapes: any[] = data.shapes || [];
       newShapes.forEach(s => addShape(s));
       setAiToast(`${newShapes.length} object${newShapes.length !== 1 ? 's' : ''} detected by ${data.model}`);
@@ -545,18 +547,74 @@ export default function AnnotationEditor() {
         </div>
 
         {/* AI Auto-annotate */}
-        <div style={{ display: 'flex', alignItems: 'center', padding: '0 10px', borderRight: '1px solid #e8e8e8', height: '100%' }}>
-          <ToolbarBtn
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%', borderRight: '1px solid #e8e8e8' }}>
+          {/* Run button */}
+          <button
             onClick={handleAutoAnnotate}
+            disabled={aiLoading}
             title="Auto-annotate this frame with AI"
-            active={aiLoading}
+            style={{ height: '100%', padding: '0 10px', border: 'none', background: aiLoading ? '#e6f4ff' : 'transparent', cursor: aiLoading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#2563EB', fontWeight: 600, transition: 'background 0.15s' }}
+            onMouseEnter={e => { if (!aiLoading) e.currentTarget.style.background = '#e6f4ff'; }}
+            onMouseLeave={e => { if (!aiLoading) e.currentTarget.style.background = 'transparent'; }}
           >
             {aiLoading
               ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><circle cx="12" cy="12" r="10" strokeDasharray="31.4" strokeDashoffset="10"/></svg>
-              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z"/><path d="M8 12h8M12 8v8"/><circle cx="12" cy="12" r="3" fill="currentColor" fillOpacity="0.2"/></svg>
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
             }
-            <span style={{ fontSize: 12 }}>{aiLoading ? 'Detecting…' : 'AI Annotate'}</span>
-          </ToolbarBtn>
+            {aiLoading ? 'Detecting…' : 'AI Annotate'}
+          </button>
+          {/* Settings chevron */}
+          <button
+            onClick={() => setAiPanelOpen(o => !o)}
+            title="AI settings"
+            style={{ height: '100%', padding: '0 6px', border: 'none', borderLeft: '1px solid #e8e8e8', background: aiPanelOpen ? '#e6f4ff' : 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#2563EB', transition: 'background 0.15s' }}
+            onMouseEnter={e => (e.currentTarget.style.background = '#e6f4ff')}
+            onMouseLeave={e => { if (!aiPanelOpen) e.currentTarget.style.background = 'transparent'; }}
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="#2563EB"><path d={aiPanelOpen ? 'M5 3L1 7h8z' : 'M5 7L1 3h8z'}/></svg>
+          </button>
+
+          {/* Dropdown settings panel */}
+          {aiPanelOpen && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, background: '#fff', border: '1px solid #e8e8e8', borderRadius: '0 0 8px 8px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 14, zIndex: 200, minWidth: 240 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', marginBottom: 10, letterSpacing: '0.05em', textTransform: 'uppercase' }}>AI Settings</div>
+
+              {/* Confidence slider */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#262626', marginBottom: 4 }}>
+                  <span>Confidence threshold</span>
+                  <span style={{ fontWeight: 600, color: '#2563EB' }}>{(aiConf * 100).toFixed(0)}%</span>
+                </div>
+                <input
+                  type="range" min="0.05" max="0.95" step="0.05"
+                  value={aiConf}
+                  onChange={e => setAiConf(parseFloat(e.target.value))}
+                  style={{ width: '100%', accentColor: '#2563EB' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#8c8c8c', marginTop: 2 }}>
+                  <span>5% — more detections</span>
+                  <span>95% — fewer, surer</span>
+                </div>
+              </div>
+
+              {/* Quick presets */}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+                {[['Low (10%)', 0.10], ['Medium (25%)', 0.25], ['High (50%)', 0.50]].map(([label, v]) => (
+                  <button key={String(v)} onClick={() => setAiConf(v as number)}
+                    style={{ fontSize: 11, padding: '3px 8px', border: `1px solid ${aiConf === v ? '#2563EB' : '#d9d9d9'}`, borderRadius: 4, background: aiConf === v ? '#e6f4ff' : '#fff', color: aiConf === v ? '#2563EB' : '#595959', cursor: 'pointer' }}>
+                    {label as string}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => { setAiPanelOpen(false); handleAutoAnnotate(); }}
+                disabled={aiLoading}
+                style={{ width: '100%', padding: '7px 0', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                Run AI Annotate
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Frame Navigation */}

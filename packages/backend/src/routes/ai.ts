@@ -1,11 +1,27 @@
 import { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
+import { execFileSync } from "child_process";
 import FormData from "form-data";
 import fetch from "node-fetch";
 import { v4 as uuidv4 } from "uuid";
 import { AppDataSource } from "../database/data-source";
 import { authMiddleware, AuthRequest } from "../middlewares/auth";
+
+const VIDEO_EXTS = new Set([".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"]);
+
+/** Extract a single frame from a video as a PNG buffer using ffmpeg. */
+function extractVideoFrame(videoPath: string, frameIndex: number): Buffer {
+  // select=eq(n,N) picks exactly frame number N (0-based)
+  return execFileSync("ffmpeg", [
+    "-i", videoPath,
+    "-vf", `select=eq(n\\,${frameIndex})`,
+    "-vframes", "1",
+    "-f", "image2pipe",
+    "-vcodec", "png",
+    "pipe:1",
+  ], { maxBuffer: 50 * 1024 * 1024 }); // 50 MB max
+}
 
 const router = Router();
 
@@ -101,9 +117,33 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
       return;
     }
 
-    // 4. POST image to AI service
+    // 4. Read image (extract frame from video if needed)
+    const ext = path.extname(absPath).toLowerCase();
+    let imageBuffer: Buffer;
+    let contentType: string;
+
+    if (VIDEO_EXTS.has(ext)) {
+      try {
+        imageBuffer = extractVideoFrame(absPath, frameIndex);
+        contentType = "image/png";
+      } catch (err: any) {
+        res.status(500).json({ error: `Failed to extract frame ${frameIndex} from video: ${err.message}` });
+        return;
+      }
+    } else {
+      imageBuffer = fs.readFileSync(absPath);
+      contentType =
+        ext === ".png" ? "image/png" :
+        ext === ".webp" ? "image/webp" :
+        "image/jpeg";
+    }
+
     const form = new FormData();
-    form.append("file", fs.createReadStream(absPath), path.basename(absPath));
+    form.append("file", imageBuffer, {
+      filename: path.basename(absPath),
+      contentType,
+      knownLength: imageBuffer.length,
+    });
     if (confidenceThreshold != null) {
       form.append("confidence_threshold", String(confidenceThreshold));
     }
