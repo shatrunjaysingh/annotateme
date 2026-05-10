@@ -225,7 +225,7 @@ const s: Record<string, React.CSSProperties> = {
     zIndex: 100,
     boxShadow: '0 1px 0 rgba(255,255,255,0.05)',
   },
-  left: { display: 'flex', alignItems: 'center', gap: 0, overflow: 'hidden', flex: 1 },
+  left: { display: 'flex', alignItems: 'center', gap: 0, flex: 1, minWidth: 0 },
   logo: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, marginRight: 8 },
   logoText: { fontWeight: 700, fontSize: 15, color: '#f1f5f9', letterSpacing: '-0.3px' },
   separator: { width: 1, height: 20, background: 'rgba(255,255,255,0.1)', margin: '0 12px', flexShrink: 0 },
