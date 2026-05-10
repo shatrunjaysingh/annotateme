@@ -18,6 +18,7 @@ import userRoutes from "./routes/users";
 import fileRoutes from "./routes/files";
 import reportRoutes from "./routes/reports";
 import tenantRoutes from "./routes/tenants";
+import aiRoutes from "./routes/ai";
 
 const app: Express = express();
 const httpServer = createServer(app);
@@ -74,6 +75,7 @@ app.use("/api/formats", extendedFormatsRoutes);
 app.use("/api/labels", labelsRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/tenants", tenantRoutes);
+app.use("/api/ai", aiRoutes);
 
 // Health check
 app.get("/health", (_req, res) => res.json({ status: "ok", timestamp: new Date().toISOString() }));

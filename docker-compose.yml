@@ -59,6 +59,20 @@ services:
       retries: 3
     restart: unless-stopped
 
+  ai-service:
+    build:
+      context: ./packages/ai
+      dockerfile: Dockerfile
+    container_name: annotateme_ai
+    environment:
+      CONFIDENCE_THRESHOLD: ${AI_CONFIDENCE_THRESHOLD:-0.25}
+      MAX_DETECTIONS: ${AI_MAX_DETECTIONS:-100}
+    ports:
+      - "8000:8000"
+    networks:
+      - annotateme
+    restart: unless-stopped
+
   backend:
     build:
       context: ./packages/backend
@@ -80,6 +94,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_BUCKET: annotateme
       UPLOAD_DIR: /app/uploads
+      AI_SERVICE_URL: http://ai-service:8000
       APP_DOMAIN: ${APP_DOMAIN:-}
       ALLOWED_ORIGINS: ${APP_DOMAIN:+https://${APP_DOMAIN}}${ALLOWED_ORIGINS:-http://localhost:4200}
     ports:
@@ -89,6 +104,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ai-service:
+        condition: service_started
     networks:
       - annotateme
     volumes:

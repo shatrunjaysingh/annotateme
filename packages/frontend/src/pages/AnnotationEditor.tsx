@@ -88,6 +88,11 @@ export default function AnnotationEditor() {
   const [newLabelName, setNewLabelName] = useState('');
   const [addingLabel, setAddingLabel] = useState(false);
 
+  // AI auto-annotation
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiStatus, setAiStatus] = useState<'idle' | 'ok' | 'unavailable'>('idle');
+  const [aiToast, setAiToast] = useState<string | null>(null);
+
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -95,7 +100,7 @@ export default function AnnotationEditor() {
 
   const {
     currentTool, setTool, setLabel, selectedLabel, selectedLabelColor,
-    shapes, setShapes, updateShape, deleteShape, selectShape, selectedShapeId,
+    shapes, setShapes, addShape, updateShape, deleteShape, selectShape, selectedShapeId,
     toggleHidden, toggleLocked, undo, redo, clearShapes,
   } = useAnnotationStore();
 
@@ -317,6 +322,25 @@ export default function AnnotationEditor() {
     setMenuOpen(false);
   }, [jobId]);
 
+  const handleAutoAnnotate = useCallback(async () => {
+    if (!jobId) return;
+    setAiLoading(true);
+    setAiToast(null);
+    try {
+      const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum });
+      const newShapes: any[] = data.shapes || [];
+      newShapes.forEach(s => addShape(s));
+      setAiToast(`${newShapes.length} object${newShapes.length !== 1 ? 's' : ''} detected by ${data.model}`);
+      setTimeout(() => setAiToast(null), 4000);
+    } catch (err: any) {
+      const msg = err.response?.data?.error || 'AI service unavailable';
+      setAiToast(`Error: ${msg}`);
+      setTimeout(() => setAiToast(null), 5000);
+    } finally {
+      setAiLoading(false);
+    }
+  }, [jobId, frameNum, addShape]);
+
   const handleRemoveAll = useCallback(async () => {
     if (!jobId) return;
     if (!confirm('Remove ALL annotations from this job? This cannot be undone.')) return;
@@ -517,6 +541,21 @@ export default function AnnotationEditor() {
           <ToolbarBtn onClick={redo} title="Redo (Ctrl+Y)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"/></svg>
             <span style={{ fontSize: 12 }}>Redo</span>
+          </ToolbarBtn>
+        </div>
+
+        {/* AI Auto-annotate */}
+        <div style={{ display: 'flex', alignItems: 'center', padding: '0 10px', borderRight: '1px solid #e8e8e8', height: '100%' }}>
+          <ToolbarBtn
+            onClick={handleAutoAnnotate}
+            title="Auto-annotate this frame with AI"
+            active={aiLoading}
+          >
+            {aiLoading
+              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><circle cx="12" cy="12" r="10" strokeDasharray="31.4" strokeDashoffset="10"/></svg>
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z"/><path d="M8 12h8M12 8v8"/><circle cx="12" cy="12" r="3" fill="currentColor" fillOpacity="0.2"/></svg>
+            }
+            <span style={{ fontSize: 12 }}>{aiLoading ? 'Detecting…' : 'AI Annotate'}</span>
           </ToolbarBtn>
         </div>
 
@@ -765,6 +804,24 @@ export default function AnnotationEditor() {
               fillOpacity={fillOpacity}
               selectedOpacity={selectedOpacity}
             />
+          )}
+
+          {/* AI toast */}
+          {aiToast && (
+            <div style={{
+              position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+              background: aiToast.startsWith('Error') ? '#fff1f0' : '#f0f9ff',
+              border: `1px solid ${aiToast.startsWith('Error') ? '#ffa39e' : '#bae6fd'}`,
+              color: aiToast.startsWith('Error') ? '#cf1322' : '#0369a1',
+              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 500,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 100,
+              display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap',
+            }}>
+              {aiToast.startsWith('Error')
+                ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>}
+              {aiToast}
+            </div>
           )}
 
           {/* Info overlay */}
