@@ -54,6 +54,9 @@ class PredictResponse(PydanticModel):
     model: str
     image_width: int
     image_height: int
+    raw_count: int
+    filtered_count: int
+    note: str | None = None
 
 
 class HealthResponse(PydanticModel):
@@ -93,18 +96,41 @@ async def predict(
         log.exception("Model inference failed")
         raise HTTPException(status_code=500, detail=f"Inference error: {exc}") from exc
 
+    raw_count = len(raw_preds)
+    if raw_count > 0:
+        confs = [p.get("confidence", 1.0) for p in raw_preds]
+        log.info("Raw predictions: %d  conf range: %.4f–%.4f", raw_count, min(confs), max(confs))
+    else:
+        log.info("Model returned 0 raw predictions (domain mismatch or no objects)")
+
     # Filter by confidence and cap count
     filtered = [
         p for p in raw_preds if p.get("confidence", 1.0) >= confidence_threshold
     ][:max_detections]
 
-    log.info("Returning %d predictions (threshold=%.2f)", len(filtered), confidence_threshold)
+    log.info("Returning %d / %d predictions (threshold=%.2f)", len(filtered), raw_count, confidence_threshold)
+
+    note: str | None = None
+    if raw_count == 0:
+        note = (
+            "Model returned 0 detections. If this is a synthetic/cartoon image the COCO-trained "
+            "model won't detect objects — annotate frames manually then run train.py to fine-tune."
+        )
+    elif len(filtered) == 0:
+        confs = [p.get("confidence", 1.0) for p in raw_preds]
+        note = (
+            f"{raw_count} objects found but all below threshold {confidence_threshold:.2f} "
+            f"(highest was {max(confs):.4f}). Lower the confidence slider and try again."
+        )
 
     return {
         "predictions": filtered,
         "model": type(active_model).__name__,
         "image_width": image.width,
         "image_height": image.height,
+        "raw_count": raw_count,
+        "filtered_count": len(filtered),
+        "note": note,
     }
 
 

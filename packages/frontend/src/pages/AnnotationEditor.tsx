@@ -332,8 +332,10 @@ export default function AnnotationEditor() {
       const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum, confidenceThreshold: aiConf });
       const newShapes: any[] = data.shapes || [];
       newShapes.forEach(s => addShape(s));
-      setAiToast(`${newShapes.length} object${newShapes.length !== 1 ? 's' : ''} detected by ${data.model}`);
-      setTimeout(() => setAiToast(null), 4000);
+      const baseMsg = `${newShapes.length} object${newShapes.length !== 1 ? 's' : ''} detected by ${data.model}`;
+      const toastMsg = data.note ? `${baseMsg} — ${data.note}` : baseMsg;
+      setAiToast(toastMsg);
+      setTimeout(() => setAiToast(null), newShapes.length === 0 ? 8000 : 4000);
     } catch (err: any) {
       const msg = err.response?.data?.error || 'AI service unavailable';
       setAiToast(`Error: ${msg}`);
@@ -341,7 +343,7 @@ export default function AnnotationEditor() {
     } finally {
       setAiLoading(false);
     }
-  }, [jobId, frameNum, addShape]);
+  }, [jobId, frameNum, addShape, aiConf]);
 
   const handleRemoveAll = useCallback(async () => {
     if (!jobId) return;
@@ -613,6 +615,34 @@ export default function AnnotationEditor() {
                 style={{ width: '100%', padding: '7px 0', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                 Run AI Annotate
               </button>
+
+              {/* Fine-tune guide */}
+              <details style={{ marginTop: 12 }}>
+                <summary style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', letterSpacing: '0.05em', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                  How to train on your data
+                </summary>
+                <div style={{ marginTop: 8, fontSize: 11, color: '#595959', lineHeight: 1.6 }}>
+                  <p style={{ margin: '0 0 6px' }}>
+                    The default model is trained on real photos (COCO). If your images are synthetic, cartoons, or a specialised domain it will return 0 detections.
+                  </p>
+                  <ol style={{ margin: 0, paddingLeft: 16 }}>
+                    <li style={{ marginBottom: 4 }}>Annotate <strong>50–200 frames</strong> manually in this editor.</li>
+                    <li style={{ marginBottom: 4 }}>Export the project: <em>Project → Export → COCO JSON</em>.</li>
+                    <li style={{ marginBottom: 4 }}>
+                      Run fine-tuning:
+                      <pre style={{ margin: '4px 0', padding: '6px 8px', background: '#f5f5f5', borderRadius: 4, fontSize: 10, overflowX: 'auto', whiteSpace: 'pre' }}>{`cd packages/ai\npython3 train.py train \\\n  --data /path/to/export.json \\\n  --images /path/to/images \\\n  --epochs 50`}</pre>
+                    </li>
+                    <li style={{ marginBottom: 4 }}>
+                      Switch to your fine-tuned weights in <code style={{ background: '#f5f5f5', padding: '1px 4px', borderRadius: 3 }}>packages/ai/model.py</code>:
+                      <pre style={{ margin: '4px 0', padding: '6px 8px', background: '#f5f5f5', borderRadius: 4, fontSize: 10, overflowX: 'auto', whiteSpace: 'pre' }}>{`active_model = ProductionModel(\n  weights="runs/segment/train/\n          weights/best.pt",\n  conf=0.01\n)`}</pre>
+                    </li>
+                    <li>Restart the AI service — predictions will now match your domain.</li>
+                  </ol>
+                  <p style={{ margin: '8px 0 0', color: '#8c8c8c', fontSize: 10 }}>
+                    While training, keep <strong>MockModel</strong> active so the annotation UI still works.
+                  </p>
+                </div>
+              </details>
             </div>
           )}
         </div>
@@ -865,22 +895,30 @@ export default function AnnotationEditor() {
           )}
 
           {/* AI toast */}
-          {aiToast && (
-            <div style={{
-              position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
-              background: aiToast.startsWith('Error') ? '#fff1f0' : '#f0f9ff',
-              border: `1px solid ${aiToast.startsWith('Error') ? '#ffa39e' : '#bae6fd'}`,
-              color: aiToast.startsWith('Error') ? '#cf1322' : '#0369a1',
-              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 500,
-              boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 100,
-              display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap',
-            }}>
-              {aiToast.startsWith('Error')
-                ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-                : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>}
-              {aiToast}
-            </div>
-          )}
+          {aiToast && (() => {
+            const isError = aiToast.startsWith('Error');
+            const isWarn = !isError && aiToast.startsWith('0 object');
+            const bg = isError ? '#fff1f0' : isWarn ? '#fffbe6' : '#f0f9ff';
+            const border = isError ? '#ffa39e' : isWarn ? '#ffe58f' : '#bae6fd';
+            const color = isError ? '#cf1322' : isWarn ? '#875500' : '#0369a1';
+            return (
+              <div style={{
+                position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+                background: bg, border: `1px solid ${border}`, color,
+                borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 500,
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 100,
+                display: 'flex', alignItems: 'flex-start', gap: 8,
+                maxWidth: 480, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}>
+                {isError
+                  ? <svg style={{ flexShrink: 0, marginTop: 1 }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                  : isWarn
+                    ? <svg style={{ flexShrink: 0, marginTop: 1 }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    : <svg style={{ flexShrink: 0, marginTop: 1 }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>}
+                {aiToast}
+              </div>
+            );
+          })()}
 
           {/* Info overlay */}
           {infoOpen && job && (

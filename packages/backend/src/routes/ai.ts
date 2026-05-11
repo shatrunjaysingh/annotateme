@@ -169,6 +169,9 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
         points: Array<{ x: number; y: number }>;
       }>;
       model: string;
+      raw_count: number;
+      filtered_count: number;
+      note?: string;
     };
 
     // 5. Convert predictions to AnnotateMe Shape format
@@ -185,7 +188,13 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
       attributes: {},
     }));
 
-    res.json({ shapes, model: aiData.model, count: shapes.length });
+    res.json({
+      shapes,
+      model: aiData.model,
+      count: shapes.length,
+      rawCount: aiData.raw_count,
+      note: aiData.note ?? null,
+    });
   } catch (err: any) {
     if (err.name === "TimeoutError") {
       res.status(504).json({ error: "AI service timed out" });

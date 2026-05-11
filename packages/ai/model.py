@@ -344,9 +344,12 @@ class CustomModel(BaseAnnotationModel):
 # Larger model for better accuracy:
 #   active_model = ProductionModel(weights="yolov8l-seg.pt")
 
-active_model: BaseAnnotationModel = ProductionModel(weights="yolov8s-seg.pt", conf=0.15)
-# active_model = ProductionModel()                                          # nano  (~7 MB, fastest)
-# active_model = ProductionModel(weights="yolov8m-seg.pt", conf=0.15)      # medium (~52 MB, more accurate)
-# active_model = ProductionModel(weights="yolov8l-seg.pt", conf=0.15)      # large  (~88 MB, best accuracy)
-# active_model = MockModel()                                                # no ML deps, random shapes
+# MockModel returns random realistic shapes — useful while fine-tuning your own data.
+# Switch to ProductionModel once you have domain-specific weights from train.py.
+active_model: BaseAnnotationModel = MockModel()
+# active_model = ProductionModel(weights="yolov8s-seg.pt", conf=0.01)      # real photos (COCO 80 classes)
+# active_model = ProductionModel(weights="yolov8n-seg.pt", conf=0.01)      # nano  (~7 MB, fastest)
+# active_model = ProductionModel(weights="yolov8m-seg.pt", conf=0.01)      # medium (~52 MB, more accurate)
+# active_model = ProductionModel(weights="yolov8l-seg.pt", conf=0.01)      # large  (~88 MB, best accuracy)
+# active_model = ProductionModel(weights="runs/segment/train/weights/best.pt", conf=0.01)  # your fine-tuned
 # active_model = CustomModel()                                              # your own architecture
