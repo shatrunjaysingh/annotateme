@@ -601,7 +601,7 @@ export default function AnnotationEditor() {
 
           {/* Dropdown settings panel */}
           {aiPanelOpen && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, background: '#fff', border: '1px solid #e8e8e8', borderRadius: '0 0 8px 8px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 14, zIndex: 200, minWidth: 260 }}>
+            <div style={{ position: 'absolute', top: '100%', left: 0, background: '#fff', border: '1px solid #e8e8e8', borderRadius: '0 0 8px 8px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 14, zIndex: 200, minWidth: 260, maxHeight: 'calc(100vh - 80px)', overflowY: 'auto' }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', marginBottom: 10, letterSpacing: '0.05em', textTransform: 'uppercase' }}>AI Settings</div>
 
               {/* Model selector */}
@@ -726,7 +726,7 @@ export default function AnnotationEditor() {
               <button
                 onClick={() => { setAiPanelOpen(false); handleAutoAnnotate(); }}
                 disabled={aiLoading}
-                style={{ width: '100%', padding: '7px 0', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                style={{ position: 'sticky', bottom: 0, width: '100%', padding: '7px 0', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: aiLoading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, boxShadow: '0 -4px 8px rgba(255,255,255,0.9)' }}>
                 Run AI Annotate
               </button>
 
