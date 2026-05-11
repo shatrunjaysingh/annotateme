@@ -51,14 +51,26 @@ router.get("/health", async (_req: Request, res: Response) => {
   }
 });
 
+// ── GET /api/ai/models ────────────────────────────────────────────────────────
+router.get("/models", authMiddleware, async (_req: Request, res: Response) => {
+  try {
+    const resp = await fetch(`${AI_SERVICE_URL}/models`, { signal: AbortSignal.timeout(5000) });
+    const body = await resp.json();
+    res.json(body);
+  } catch {
+    res.status(503).json({ error: "AI service unavailable" });
+  }
+});
+
 // ── POST /api/ai/annotate ─────────────────────────────────────────────────────
-// Body: { jobId, frameIndex, confidenceThreshold? }
+// Body: { jobId, frameIndex, confidenceThreshold?, modelName? }
 // Returns: { shapes: Shape[], model: string }
 router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response) => {
-  const { jobId, frameIndex, confidenceThreshold } = req.body as {
+  const { jobId, frameIndex, confidenceThreshold, modelName } = req.body as {
     jobId: string;
     frameIndex: number;
     confidenceThreshold?: number;
+    modelName?: string;
   };
 
   if (!jobId || frameIndex == null) {
@@ -147,6 +159,7 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
     if (confidenceThreshold != null) {
       form.append("confidence_threshold", String(confidenceThreshold));
     }
+    form.append("model_name", modelName ?? "active");
 
     const aiResp = await fetch(`${AI_SERVICE_URL}/predict`, {
       method: "POST",

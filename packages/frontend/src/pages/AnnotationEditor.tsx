@@ -94,6 +94,8 @@ export default function AnnotationEditor() {
   const [aiToast, setAiToast] = useState<string | null>(null);
   const [aiConf, setAiConf] = useState(0.15);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiModelName, setAiModelName] = useState('active');
+  const [aiModels, setAiModels] = useState<Array<{ id: string; name: string; description: string }>>([]);
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -129,6 +131,13 @@ export default function AnnotationEditor() {
     };
     load();
   }, [jobId, navigate, setLabel]);
+
+  // Fetch available AI models
+  useEffect(() => {
+    client.get('/ai/models').then(({ data }) => {
+      setAiModels(data.available || []);
+    }).catch(() => {});
+  }, []);
 
   // Load frame annotations
   useEffect(() => {
@@ -329,7 +338,7 @@ export default function AnnotationEditor() {
     setAiLoading(true);
     setAiToast(null);
     try {
-      const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum, confidenceThreshold: aiConf });
+      const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum, confidenceThreshold: aiConf, modelName: aiModelName });
       const newShapes: any[] = data.shapes || [];
       newShapes.forEach(s => addShape(s));
       const baseMsg = `${newShapes.length} object${newShapes.length !== 1 ? 's' : ''} detected by ${data.model}`;
@@ -343,7 +352,7 @@ export default function AnnotationEditor() {
     } finally {
       setAiLoading(false);
     }
-  }, [jobId, frameNum, addShape, aiConf]);
+  }, [jobId, frameNum, addShape, aiConf, aiModelName]);
 
   const handleRemoveAll = useCallback(async () => {
     if (!jobId) return;
@@ -578,8 +587,35 @@ export default function AnnotationEditor() {
 
           {/* Dropdown settings panel */}
           {aiPanelOpen && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, background: '#fff', border: '1px solid #e8e8e8', borderRadius: '0 0 8px 8px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 14, zIndex: 200, minWidth: 240 }}>
+            <div style={{ position: 'absolute', top: '100%', left: 0, background: '#fff', border: '1px solid #e8e8e8', borderRadius: '0 0 8px 8px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 14, zIndex: 200, minWidth: 260 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', marginBottom: 10, letterSpacing: '0.05em', textTransform: 'uppercase' }}>AI Settings</div>
+
+              {/* Model selector */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: '#262626', marginBottom: 6, fontWeight: 500 }}>Model</div>
+                {aiModels.length === 0 ? (
+                  <div style={{ fontSize: 11, color: '#8c8c8c' }}>Loading models…</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {aiModels.map(m => (
+                      <label key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: aiModelName === m.id ? '#e6f4ff' : '#fafafa', border: `1px solid ${aiModelName === m.id ? '#2563EB' : '#e8e8e8'}` }}>
+                        <input
+                          type="radio"
+                          name="aiModel"
+                          value={m.id}
+                          checked={aiModelName === m.id}
+                          onChange={() => setAiModelName(m.id)}
+                          style={{ marginTop: 2, accentColor: '#2563EB' }}
+                        />
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{m.name}</div>
+                          <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1, lineHeight: 1.4 }}>{m.description}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               {/* Confidence slider */}
               <div style={{ marginBottom: 12 }}>
