@@ -302,6 +302,70 @@ class ProductionModel(BaseAnnotationModel):
 
 # ─────────────────────────── custom model stub ──────────────────────────────
 
+class YOLOWorldModel(BaseAnnotationModel):
+    """
+    YOLO-World: open-vocabulary detection — detect any object by typing its name.
+
+    Unlike standard YOLO (fixed 80 COCO classes), YOLO-World accepts arbitrary
+    text class names and finds them in the image without fine-tuning.
+
+    Parameters
+    ----------
+    classes : list[str]
+        Class names to detect, e.g. ["car", "scratch", "tumour"].
+        Defaults to a broad set of common objects.
+    conf : float
+        Minimum confidence threshold (default 0.01, filtered by API).
+    weights : str
+        YOLO-World checkpoint. "yolov8s-worldv2.pt" (~100 MB, auto-downloads).
+    """
+
+    DEFAULT_CLASSES = ["person", "car", "truck", "bus", "bicycle", "motorcycle",
+                       "dog", "cat", "chair", "table", "bottle", "bag"]
+
+    def __init__(
+        self,
+        classes: list[str] | None = None,
+        conf: float = 0.01,
+        weights: str = "yolov8s-worldv2.pt",
+    ) -> None:
+        try:
+            from ultralytics import YOLOWorld  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "ultralytics is not installed or too old for YOLO-World.\n"
+                "Run: pip install 'ultralytics>=8.1'"
+            ) from exc
+
+        self._model = YOLOWorld(weights)
+        self._conf = conf
+        self._classes = classes or self.DEFAULT_CLASSES
+        self._model.set_classes(self._classes)
+
+    def set_classes(self, classes: list[str]) -> None:
+        self._classes = classes
+        self._model.set_classes(classes)
+
+    def predict(self, image: Image.Image) -> list[Prediction]:
+        results = self._model.predict(
+            source=image, conf=self._conf, verbose=False
+        )
+        result = results[0]
+        names: dict[int, str] = result.names
+        out: list[Prediction] = []
+        for box in result.boxes:
+            label = names[int(box.cls[0])]
+            conf = round(float(box.conf[0]), 4)
+            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+            out.append({
+                "type": "rect",
+                "label": label,
+                "confidence": conf,
+                "points": [{"x": x1, "y": y1}, {"x": x2, "y": y2}],
+            })
+        return out
+
+
 class CustomModel(BaseAnnotationModel):
     """
     Template for a fully custom model.
@@ -311,18 +375,9 @@ class CustomModel(BaseAnnotationModel):
     """
 
     def __init__(self):
-        # Example:
-        #   import torch
-        #   self.net = torch.load("my_weights.pt", map_location="cpu")
-        #   self.net.eval()
         raise NotImplementedError("Fill in CustomModel.__init__ with your model loading code.")
 
     def predict(self, image: Image.Image) -> list[Prediction]:
-        # w, h = image.size
-        # tensor = your_preprocess(image)
-        # with torch.no_grad():
-        #     boxes, scores, labels = self.net(tensor)
-        # return your_postprocess(boxes, scores, labels)
         raise NotImplementedError("Fill in CustomModel.predict with your inference code.")
 
 

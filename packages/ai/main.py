@@ -4,7 +4,7 @@ main.py — AnnotateMe AI inference service.
 Endpoints
 ---------
 GET  /health          liveness probe
-GET  /models          list available models and which is active
+GET  /models          full model catalog (integrated + planned)
 POST /predict         run inference on an uploaded image
 """
 
@@ -19,7 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel as PydanticModel
 
-from model import BaseAnnotationModel, MockModel, Prediction, ProductionModel, active_model
+from model import (
+    BaseAnnotationModel, MockModel, Prediction,
+    ProductionModel, YOLOWorldModel, active_model,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -38,14 +41,22 @@ MAX_DETECTIONS = int(os.getenv("MAX_DETECTIONS", "100"))
 CUSTOM_WEIGHTS = os.getenv("CUSTOM_WEIGHTS_PATH", "runs/segment/train/weights/best.pt")
 
 # ── Model registry ─────────────────────────────────────────────────────────────
-# Models are loaded lazily on first use and cached for subsequent requests.
 
 _registry: dict[str, BaseAnnotationModel] = {"active": active_model}
 _registry_lock = threading.Lock()
 
 
-def _get_model(name: str) -> BaseAnnotationModel:
+def _get_model(name: str, classes: list[str] | None = None) -> BaseAnnotationModel:
     with _registry_lock:
+        if name == "yolo-world":
+            # Always re-apply classes if provided; create instance on first use
+            if name not in _registry:
+                log.info("Loading YOLO-World for the first time…")
+                _registry[name] = YOLOWorldModel(classes=classes)
+            elif classes:
+                _registry[name].set_classes(classes)  # type: ignore[attr-defined]
+            return _registry[name]
+
         if name not in _registry:
             log.info("Loading model '%s' for the first time…", name)
             if name == "mock":
@@ -60,7 +71,9 @@ def _get_model(name: str) -> BaseAnnotationModel:
                     )
                 _registry[name] = ProductionModel(weights=CUSTOM_WEIGHTS, conf=0.01)
             else:
-                raise ValueError(f"Unknown model '{name}'. Valid: mock, production, custom, active")
+                raise ValueError(
+                    f"Unknown model '{name}'. Valid: mock, production, yolo-world, custom, active"
+                )
         return _registry[name]
 
 
@@ -93,11 +106,6 @@ class HealthResponse(PydanticModel):
     model: str
 
 
-class ModelsResponse(PydanticModel):
-    available: list[dict]
-    active: str
-
-
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse)
@@ -105,19 +113,113 @@ def health():
     return {"status": "ok", "model": type(active_model).__name__}
 
 
-@app.get("/models", response_model=ModelsResponse)
+@app.get("/models")
 def list_models():
-    available = [
-        {"id": "mock",       "name": "MockModel",       "description": "Random shapes — no ML, always works. Use while training your own model."},
-        {"id": "production", "name": "ProductionModel", "description": "YOLOv8s-seg pre-trained on COCO (80 classes). Works on real photographs."},
-    ]
-    if os.path.exists(CUSTOM_WEIGHTS):
-        available.append({
-            "id": "custom",
-            "name": "Custom (fine-tuned)",
-            "description": f"Your fine-tuned model: {CUSTOM_WEIGHTS}",
-        })
-    return {"available": available, "active": type(active_model).__name__}
+    """Return full model catalog. integrated=True means it can be selected now."""
+    has_custom = os.path.exists(CUSTOM_WEIGHTS)
+    return {
+        "active": type(active_model).__name__,
+        "models": [
+            {
+                "id": "mock",
+                "name": "MockModel",
+                "integrated": True,
+                "badge": "DEMO",
+                "badgeColor": "orange",
+                "tagline": "Random shapes — no real ML",
+                "description": (
+                    "Generates random bounding boxes and polygons with no ML inference. "
+                    "Use this to test the save / label / export workflow while you prepare "
+                    "training data. Shapes are placed randomly — not based on image content."
+                ),
+                "bestFor": "Testing the annotation UI pipeline",
+                "domains": "Any image",
+                "supportsClasses": False,
+            },
+            {
+                "id": "production",
+                "name": "YOLOv8-seg",
+                "integrated": True,
+                "badge": None,
+                "badgeColor": None,
+                "tagline": "Pre-trained on 80 COCO classes",
+                "description": (
+                    "YOLOv8s segmentation model pre-trained on the COCO dataset. Returns both "
+                    "bounding boxes and precise polygon masks. Fast and accurate for everyday "
+                    "objects in real photographs."
+                ),
+                "bestFor": "Real photographs with everyday objects",
+                "domains": "Street scenes, indoor, animals, vehicles",
+                "supportsClasses": False,
+            },
+            {
+                "id": "yolo-world",
+                "name": "YOLO-World",
+                "integrated": True,
+                "badge": "OPEN-VOCAB",
+                "badgeColor": "blue",
+                "tagline": "Detect any object by typing its name",
+                "description": (
+                    "Open-vocabulary YOLO — type the class names you want to detect and it finds "
+                    "them without any fine-tuning. Extends standard YOLO beyond the 80 COCO "
+                    "classes to any concept you can name. Downloads ~100 MB weights on first use."
+                ),
+                "bestFor": "Custom classes on real-photo datasets",
+                "domains": "Any real photographs with custom labels",
+                "supportsClasses": True,
+            },
+            {
+                "id": "custom",
+                "name": "Custom (fine-tuned)",
+                "integrated": has_custom,
+                "badge": "FINE-TUNED",
+                "badgeColor": "green",
+                "tagline": "Your own model trained on your data",
+                "description": (
+                    "Your fine-tuned YOLOv8 checkpoint produced by train.py. After annotating "
+                    "50–200 frames and running fine-tuning, this model learns your specific "
+                    f"domain and label set. Weights: {CUSTOM_WEIGHTS}"
+                ),
+                "bestFor": "Your specific domain and custom labels",
+                "domains": "Whatever you trained it on",
+                "supportsClasses": False,
+            },
+            {
+                "id": "sam2",
+                "name": "SAM 2",
+                "integrated": False,
+                "badge": "INTERACTIVE",
+                "badgeColor": "purple",
+                "tagline": "Click any object → instant precise polygon",
+                "description": (
+                    "Meta's Segment Anything Model 2. Click on any object in the canvas and it "
+                    "instantly traces a pixel-perfect polygon boundary. Works on any visual domain "
+                    "without fine-tuning — photos, cartoons, medical, satellite imagery. Also "
+                    "tracks objects across video frames."
+                ),
+                "bestFor": "Any domain — the gold standard for interactive annotation",
+                "domains": "Any image or video, any domain",
+                "supportsClasses": False,
+            },
+            {
+                "id": "grounded-sam",
+                "name": "Grounded SAM",
+                "integrated": False,
+                "badge": "BEST QUALITY",
+                "badgeColor": "purple",
+                "tagline": "Type a label → auto-detect + precise polygon",
+                "description": (
+                    "Combines Grounding DINO (open-vocabulary detection from text prompts) with "
+                    "SAM 2 (precise segmentation). Type what you want to detect and get "
+                    "pixel-perfect polygon masks across any domain. The most powerful option for "
+                    "zero-shot automatic annotation."
+                ),
+                "bestFor": "Highest quality automatic annotation on any domain",
+                "domains": "Any image, any label, any domain",
+                "supportsClasses": True,
+            },
+        ],
+    }
 
 
 @app.post("/predict", response_model=PredictResponse)
@@ -126,6 +228,7 @@ async def predict(
     confidence_threshold: float = Form(CONFIDENCE_THRESHOLD),
     max_detections: int = Form(MAX_DETECTIONS),
     model_name: str = Form("active"),
+    classes: str = Form(""),  # comma-separated class list for YOLO-World
 ):
     raw = await file.read()
     try:
@@ -133,14 +236,17 @@ async def predict(
     except UnidentifiedImageError:
         raise HTTPException(status_code=400, detail="Could not decode image")
 
+    parsed_classes = [c.strip() for c in classes.split(",") if c.strip()] if classes else None
+
     try:
-        model = _get_model(model_name)
+        model = _get_model(model_name, classes=parsed_classes)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     log.info(
-        "Running %s on %dx%d image (%s bytes)",
+        "Running %s on %dx%d image (%s bytes)%s",
         type(model).__name__, image.width, image.height, len(raw),
+        f" classes={parsed_classes}" if parsed_classes else "",
     )
 
     try:

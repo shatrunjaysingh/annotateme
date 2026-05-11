@@ -66,11 +66,12 @@ router.get("/models", authMiddleware, async (_req: Request, res: Response) => {
 // Body: { jobId, frameIndex, confidenceThreshold?, modelName? }
 // Returns: { shapes: Shape[], model: string }
 router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response) => {
-  const { jobId, frameIndex, confidenceThreshold, modelName } = req.body as {
+  const { jobId, frameIndex, confidenceThreshold, modelName, classes } = req.body as {
     jobId: string;
     frameIndex: number;
     confidenceThreshold?: number;
     modelName?: string;
+    classes?: string; // comma-separated, for YOLO-World
   };
 
   if (!jobId || frameIndex == null) {
@@ -160,6 +161,7 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
       form.append("confidence_threshold", String(confidenceThreshold));
     }
     form.append("model_name", modelName ?? "active");
+    if (classes) form.append("classes", classes);
 
     const aiResp = await fetch(`${AI_SERVICE_URL}/predict`, {
       method: "POST",

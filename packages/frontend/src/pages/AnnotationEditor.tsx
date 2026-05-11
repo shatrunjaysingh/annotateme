@@ -94,8 +94,10 @@ export default function AnnotationEditor() {
   const [aiToast, setAiToast] = useState<string | null>(null);
   const [aiConf, setAiConf] = useState(0.15);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
-  const [aiModelName, setAiModelName] = useState('active');
-  const [aiModels, setAiModels] = useState<Array<{ id: string; name: string; description: string }>>([]);
+  const [aiModelName, setAiModelName] = useState('mock');
+  const [aiModels, setAiModels] = useState<any[]>([]);
+  const [aiInfoOpen, setAiInfoOpen] = useState<string | null>(null); // model id with info expanded
+  const [aiClasses, setAiClasses] = useState(''); // comma-separated classes for YOLO-World
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -134,10 +136,10 @@ export default function AnnotationEditor() {
     load();
   }, [jobId, navigate, setLabel]);
 
-  // Fetch available AI models
+  // Fetch AI model catalog
   useEffect(() => {
     client.get('/ai/models').then(({ data }) => {
-      setAiModels(data.available || []);
+      setAiModels(data.models || []);
     }).catch(() => {});
   }, []);
 
@@ -345,7 +347,7 @@ export default function AnnotationEditor() {
       aiShapeIds.current.forEach(id => deleteShape(id));
       aiShapeIds.current = [];
 
-      const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum, confidenceThreshold: aiConf, modelName: aiModelName });
+      const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum, confidenceThreshold: aiConf, modelName: aiModelName, classes: aiClasses || undefined });
       const newShapes: any[] = data.shapes || [];
       newShapes.forEach(s => addShape(s));
       aiShapeIds.current = newShapes.map((s: any) => s.id);
@@ -364,7 +366,7 @@ export default function AnnotationEditor() {
     } finally {
       setAiLoading(false);
     }
-  }, [jobId, frameNum, addShape, deleteShape, aiConf, aiModelName]);
+  }, [jobId, frameNum, addShape, deleteShape, aiConf, aiModelName, aiClasses]);
 
   const handleRemoveAll = useCallback(async () => {
     if (!jobId) return;
@@ -604,36 +606,94 @@ export default function AnnotationEditor() {
 
               {/* Model selector */}
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: '#262626', marginBottom: 6, fontWeight: 500 }}>Model</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', marginBottom: 8, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Model</div>
                 {aiModels.length === 0 ? (
                   <div style={{ fontSize: 11, color: '#8c8c8c' }}>Loading models…</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {aiModels.map(m => {
-                      const isMock = m.id === 'mock';
+                    {aiModels.map((m: any) => {
+                      const isSelected = aiModelName === m.id;
+                      const isDisabled = !m.integrated;
+                      const badgeColors: Record<string, { bg: string; color: string; border: string }> = {
+                        orange: { bg: '#fff7e6', color: '#d46b08', border: '#ffd591' },
+                        blue:   { bg: '#e6f7ff', color: '#096dd9', border: '#91d5ff' },
+                        green:  { bg: '#f6ffed', color: '#389e0d', border: '#b7eb8f' },
+                        purple: { bg: '#f9f0ff', color: '#722ed1', border: '#d3adf7' },
+                      };
+                      const bc = m.badgeColor ? badgeColors[m.badgeColor] : null;
+                      const infoShowing = aiInfoOpen === m.id;
                       return (
-                        <label key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: aiModelName === m.id ? '#e6f4ff' : '#fafafa', border: `1px solid ${aiModelName === m.id ? '#2563EB' : '#e8e8e8'}` }}>
-                          <input
-                            type="radio"
-                            name="aiModel"
-                            value={m.id}
-                            checked={aiModelName === m.id}
-                            onChange={() => setAiModelName(m.id)}
-                            style={{ marginTop: 2, accentColor: '#2563EB' }}
-                          />
-                          <div style={{ flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{m.name}</span>
-                              {isMock && <span style={{ fontSize: 9, fontWeight: 700, background: '#fff7e6', color: '#d46b08', border: '1px solid #ffd591', borderRadius: 3, padding: '1px 4px', letterSpacing: '0.04em' }}>RANDOM</span>}
+                        <div key={m.id}>
+                          <div
+                            onClick={() => !isDisabled && setAiModelName(m.id)}
+                            style={{
+                              display: 'flex', alignItems: 'flex-start', gap: 8,
+                              cursor: isDisabled ? 'not-allowed' : 'pointer',
+                              padding: '7px 8px', borderRadius: 6,
+                              background: isSelected ? '#e6f4ff' : isDisabled ? '#fafafa' : '#fafafa',
+                              border: `1px solid ${isSelected ? '#2563EB' : '#e8e8e8'}`,
+                              opacity: isDisabled ? 0.6 : 1,
+                            }}
+                          >
+                            <input
+                              type="radio" name="aiModel" value={m.id}
+                              checked={isSelected} disabled={isDisabled}
+                              onChange={() => !isDisabled && setAiModelName(m.id)}
+                              style={{ marginTop: 3, accentColor: '#2563EB', flexShrink: 0 }}
+                            />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: isDisabled ? '#8c8c8c' : '#262626' }}>{m.name}</span>
+                                {m.badge && bc && (
+                                  <span style={{ fontSize: 9, fontWeight: 700, background: bc.bg, color: bc.color, border: `1px solid ${bc.border}`, borderRadius: 3, padding: '1px 4px', letterSpacing: '0.04em', flexShrink: 0 }}>{m.badge}</span>
+                                )}
+                                {isDisabled && (
+                                  <span style={{ fontSize: 9, fontWeight: 700, background: '#f5f5f5', color: '#8c8c8c', border: '1px solid #d9d9d9', borderRadius: 3, padding: '1px 4px', flexShrink: 0 }}>COMING SOON</span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1 }}>{m.tagline}</div>
                             </div>
-                            <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1, lineHeight: 1.4 }}>{m.description}</div>
+                            {/* Info icon */}
+                            <button
+                              onClick={e => { e.stopPropagation(); setAiInfoOpen(infoShowing ? null : m.id); }}
+                              title="About this model"
+                              style={{ flexShrink: 0, width: 18, height: 18, borderRadius: '50%', border: `1px solid ${infoShowing ? '#2563EB' : '#d9d9d9'}`, background: infoShowing ? '#e6f4ff' : '#fff', color: infoShowing ? '#2563EB' : '#8c8c8c', fontSize: 10, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                            >
+                              i
+                            </button>
                           </div>
-                        </label>
+
+                          {/* Info panel */}
+                          {infoShowing && (
+                            <div style={{ margin: '2px 0 4px 26px', padding: '8px 10px', background: '#f8faff', border: '1px solid #d6e4ff', borderRadius: 6, fontSize: 11, color: '#434343', lineHeight: 1.6 }}>
+                              <p style={{ margin: '0 0 6px' }}>{m.description}</p>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                <div><span style={{ fontWeight: 600, color: '#595959' }}>Best for: </span>{m.bestFor}</div>
+                                <div><span style={{ fontWeight: 600, color: '#595959' }}>Works on: </span>{m.domains}</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
                 )}
               </div>
+
+              {/* YOLO-World class input */}
+              {aiModelName === 'yolo-world' && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Classes to detect</div>
+                  <input
+                    type="text"
+                    value={aiClasses}
+                    onChange={e => setAiClasses(e.target.value)}
+                    placeholder="car, person, scratch, tumour…"
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', border: '1px solid #d9d9d9', borderRadius: 5, fontSize: 11, outline: 'none' }}
+                  />
+                  <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 3 }}>Comma-separated. Leave empty to use default classes.</div>
+                </div>
+              )}
 
               {/* Confidence slider */}
               <div style={{ marginBottom: 12 }}>
