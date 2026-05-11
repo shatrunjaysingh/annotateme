@@ -101,6 +101,8 @@ export default function AnnotationEditor() {
   const menuRef = useRef<HTMLDivElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
+  // Track IDs of shapes added by the last AI Annotate run so we can replace them next time
+  const aiShapeIds = useRef<string[]>([]);
 
   const {
     currentTool, setTool, setLabel, selectedLabel, selectedLabelColor,
@@ -143,6 +145,7 @@ export default function AnnotationEditor() {
   useEffect(() => {
     if (!jobId) return;
     clearShapes();
+    aiShapeIds.current = []; // AI shapes from previous frame are gone
     const load = async () => {
       try {
         const { data } = await client.get(`/jobs/${jobId}/frame/${frameNum}`);
@@ -338,13 +341,22 @@ export default function AnnotationEditor() {
     setAiLoading(true);
     setAiToast(null);
     try {
+      // Remove shapes from the previous AI run before adding new ones
+      aiShapeIds.current.forEach(id => deleteShape(id));
+      aiShapeIds.current = [];
+
       const { data } = await client.post('/ai/annotate', { jobId, frameIndex: frameNum, confidenceThreshold: aiConf, modelName: aiModelName });
       const newShapes: any[] = data.shapes || [];
       newShapes.forEach(s => addShape(s));
-      const baseMsg = `${newShapes.length} object${newShapes.length !== 1 ? 's' : ''} detected by ${data.model}`;
+      aiShapeIds.current = newShapes.map((s: any) => s.id);
+
+      const isMock = data.model === 'MockModel';
+      const baseMsg = isMock
+        ? `${newShapes.length} demo shape${newShapes.length !== 1 ? 's' : ''} added (MockModel generates random shapes for UI testing — not real detections)`
+        : `${newShapes.length} object${newShapes.length !== 1 ? 's' : ''} detected by ${data.model}`;
       const toastMsg = data.note ? `${baseMsg} — ${data.note}` : baseMsg;
       setAiToast(toastMsg);
-      setTimeout(() => setAiToast(null), newShapes.length === 0 ? 8000 : 4000);
+      setTimeout(() => setAiToast(null), isMock || newShapes.length === 0 ? 8000 : 4000);
     } catch (err: any) {
       const msg = err.response?.data?.error || 'AI service unavailable';
       setAiToast(`Error: ${msg}`);
@@ -352,7 +364,7 @@ export default function AnnotationEditor() {
     } finally {
       setAiLoading(false);
     }
-  }, [jobId, frameNum, addShape, aiConf, aiModelName]);
+  }, [jobId, frameNum, addShape, deleteShape, aiConf, aiModelName]);
 
   const handleRemoveAll = useCallback(async () => {
     if (!jobId) return;
@@ -597,22 +609,28 @@ export default function AnnotationEditor() {
                   <div style={{ fontSize: 11, color: '#8c8c8c' }}>Loading models…</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {aiModels.map(m => (
-                      <label key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: aiModelName === m.id ? '#e6f4ff' : '#fafafa', border: `1px solid ${aiModelName === m.id ? '#2563EB' : '#e8e8e8'}` }}>
-                        <input
-                          type="radio"
-                          name="aiModel"
-                          value={m.id}
-                          checked={aiModelName === m.id}
-                          onChange={() => setAiModelName(m.id)}
-                          style={{ marginTop: 2, accentColor: '#2563EB' }}
-                        />
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{m.name}</div>
-                          <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1, lineHeight: 1.4 }}>{m.description}</div>
-                        </div>
-                      </label>
-                    ))}
+                    {aiModels.map(m => {
+                      const isMock = m.id === 'mock';
+                      return (
+                        <label key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: aiModelName === m.id ? '#e6f4ff' : '#fafafa', border: `1px solid ${aiModelName === m.id ? '#2563EB' : '#e8e8e8'}` }}>
+                          <input
+                            type="radio"
+                            name="aiModel"
+                            value={m.id}
+                            checked={aiModelName === m.id}
+                            onChange={() => setAiModelName(m.id)}
+                            style={{ marginTop: 2, accentColor: '#2563EB' }}
+                          />
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{m.name}</span>
+                              {isMock && <span style={{ fontSize: 9, fontWeight: 700, background: '#fff7e6', color: '#d46b08', border: '1px solid #ffd591', borderRadius: 3, padding: '1px 4px', letterSpacing: '0.04em' }}>RANDOM</span>}
+                            </div>
+                            <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 1, lineHeight: 1.4 }}>{m.description}</div>
+                          </div>
+                        </label>
+                      );
+                    })}
                   </div>
                 )}
               </div>
