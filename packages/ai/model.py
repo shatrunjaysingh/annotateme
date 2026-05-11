@@ -108,6 +108,32 @@ def _mask_to_polygon(xy: np.ndarray, epsilon: float = 2.0,
     return [{"x": float(p[0]), "y": float(p[1])} for p in pts]
 
 
+def _binary_mask_to_polygon(mask: np.ndarray, epsilon_factor: float = 0.005,
+                             min_area: int = 100) -> list[Point]:
+    """
+    Convert a binary mask (H×W bool/uint8) to a polygon point list.
+    Uses OpenCV contour tracing when available, falls back to RDP on boundary pixels.
+    """
+    mask = mask.astype(np.uint8)
+    try:
+        import cv2  # available via ultralytics
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return []
+        contour = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(contour) < min_area:
+            return []
+        peri = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon_factor * peri, True)
+        pts = approx.reshape(-1, 2)
+        return [{"x": float(p[0]), "y": float(p[1])} for p in pts] if len(pts) >= 3 else []
+    except ImportError:
+        rows, cols = np.where(mask > 0)
+        if len(rows) < 3:
+            return []
+        return _mask_to_polygon(np.column_stack([cols, rows]), epsilon=2.0)
+
+
 # ─────────────────────────── mock model ─────────────────────────────────────
 
 class MockModel(BaseAnnotationModel):
@@ -364,6 +390,248 @@ class YOLOWorldModel(BaseAnnotationModel):
                 "points": [{"x": x1, "y": y1}, {"x": x2, "y": y2}],
             })
         return out
+
+
+class SAM2Model(BaseAnnotationModel):
+    """
+    Meta Segment Anything Model 2 — automatic segmentation of every object.
+
+    No text prompts or clicks needed. Generates masks for all visible objects
+    and works on any visual domain (photos, cartoons, medical, satellite…).
+    Downloads ~185 MB of weights from HuggingFace on first use.
+
+    Parameters
+    ----------
+    model_id : str
+        HuggingFace model id.  Options (smaller→larger, faster→more accurate):
+          "facebook/sam2-hiera-tiny"    ~38 MB
+          "facebook/sam2-hiera-small"   ~185 MB  (default)
+          "facebook/sam2-hiera-base-plus"
+          "facebook/sam2-hiera-large"
+    pred_iou_thresh : float
+        Keep masks whose predicted IoU exceeds this (default 0.7).
+    stability_score_thresh : float
+        Keep masks with stability score above this (default 0.85).
+    points_per_batch : int
+        SAM2 samples a grid of points; fewer = faster (default 32).
+    """
+
+    def __init__(
+        self,
+        model_id: str = "facebook/sam2-hiera-small",
+        pred_iou_thresh: float = 0.70,
+        stability_score_thresh: float = 0.85,
+        points_per_batch: int = 32,
+        device: str | None = None,
+    ) -> None:
+        try:
+            from transformers import pipeline as hf_pipeline  # type: ignore
+            import torch
+        except ImportError as exc:
+            raise ImportError(
+                "transformers is not installed.\n"
+                "Run: pip install 'transformers>=4.40.0' accelerate"
+            ) from exc
+
+        if device is None:
+            import torch
+            device = (
+                "cuda" if torch.cuda.is_available() else
+                "mps"  if torch.backends.mps.is_available() else
+                "cpu"
+            )
+
+        self._pipe = hf_pipeline(
+            "mask-generation", model=model_id,
+            device=device,
+        )
+        self._iou_thresh   = pred_iou_thresh
+        self._stab_thresh  = stability_score_thresh
+        self._ppb          = points_per_batch
+
+    def predict(self, image: Image.Image) -> list[Prediction]:
+        import torch
+        with torch.no_grad():
+            outputs = self._pipe(
+                image,
+                pred_iou_thresh=self._iou_thresh,
+                stability_score_thresh=self._stab_thresh,
+                points_per_batch=self._ppb,
+            )
+
+        # Pipeline returns a list of {"mask": PIL|ndarray, "score": float}
+        items: list = outputs if isinstance(outputs, list) else []
+        preds: list[Prediction] = []
+
+        for item in items:
+            raw_mask = item.get("mask") or item.get("segmentation")
+            score    = float(item.get("score", 0.9))
+            if raw_mask is None:
+                continue
+            mask_arr = np.array(raw_mask).astype(np.uint8)
+            pts = _binary_mask_to_polygon(mask_arr)
+            if pts:
+                preds.append({
+                    "type":       "polygon",
+                    "label":      "object",
+                    "confidence": round(score, 4),
+                    "points":     pts,
+                })
+
+        return preds
+
+
+class GroundedSAMModel(BaseAnnotationModel):
+    """
+    Grounded SAM = Grounding DINO (text → boxes) + SAM (boxes → polygons).
+
+    Type any class names and get pixel-perfect polygon masks — zero-shot,
+    no fine-tuning, any domain.
+    Downloads ~375 MB (Grounding DINO) + ~375 MB (SAM) on first use.
+
+    Parameters
+    ----------
+    classes : list[str]
+        Default class names to detect.  Can be overridden per-request
+        via set_classes() or the 'classes' API field.
+    dino_model_id : str
+        HuggingFace id for Grounding DINO (zero-shot object detector).
+    sam_model_id : str
+        HuggingFace id for SAM (segmentation).
+    box_threshold : float
+        Grounding DINO box confidence cutoff (default 0.30).
+    text_threshold : float
+        Grounding DINO text similarity cutoff (default 0.25).
+    """
+
+    DEFAULT_CLASSES = ["object", "person", "car", "animal"]
+
+    def __init__(
+        self,
+        classes: list[str] | None = None,
+        dino_model_id: str = "IDEA-Research/grounding-dino-base",
+        sam_model_id:  str = "facebook/sam-vit-base",
+        box_threshold:  float = 0.30,
+        text_threshold: float = 0.25,
+        device: str | None = None,
+    ) -> None:
+        try:
+            import torch
+            from transformers import (  # type: ignore
+                AutoProcessor,
+                AutoModelForZeroShotObjectDetection,
+                SamModel,
+                SamProcessor,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "transformers is not installed.\n"
+                "Run: pip install 'transformers>=4.40.0' accelerate"
+            ) from exc
+
+        import torch
+        if device is None:
+            device = (
+                "cuda" if torch.cuda.is_available() else
+                "mps"  if torch.backends.mps.is_available() else
+                "cpu"
+            )
+
+        self._device      = device
+        self._box_thresh  = box_threshold
+        self._text_thresh = text_threshold
+        self._classes     = classes or self.DEFAULT_CLASSES
+
+        # Grounding DINO — zero-shot object detector
+        self._dino_proc  = AutoProcessor.from_pretrained(dino_model_id)
+        self._dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(
+            dino_model_id
+        ).to(device)
+
+        # SAM — segment each detected box
+        self._sam_proc  = SamProcessor.from_pretrained(sam_model_id)
+        self._sam_model = SamModel.from_pretrained(sam_model_id).to(device)
+
+    def set_classes(self, classes: list[str]) -> None:
+        self._classes = classes
+
+    def predict(self, image: Image.Image) -> list[Prediction]:
+        import torch
+
+        text_prompt = ". ".join(self._classes) + "."
+
+        # ── Step 1: Grounding DINO → bounding boxes ───────────────────────────
+        dino_inputs = self._dino_proc(
+            images=image, text=text_prompt, return_tensors="pt"
+        ).to(self._device)
+
+        with torch.no_grad():
+            dino_out = self._dino_model(**dino_inputs)
+
+        results = self._dino_proc.post_process_grounded_object_detection(
+            dino_out,
+            dino_inputs.input_ids,
+            box_threshold=self._box_thresh,
+            text_threshold=self._text_thresh,
+            target_sizes=[(image.height, image.width)],
+        )[0]
+
+        boxes  = results["boxes"].cpu().tolist()
+        labels = results["labels"]
+        scores = results["scores"].cpu().tolist()
+
+        if not boxes:
+            return []
+
+        # ── Step 2: SAM → polygon mask for each box ───────────────────────────
+        preds: list[Prediction] = []
+
+        for box, label, score in zip(boxes, labels, scores):
+            x1, y1, x2, y2 = [float(v) for v in box]
+            conf = round(score, 4)
+
+            # Always emit a bounding box
+            preds.append({
+                "type":       "rect",
+                "label":      label,
+                "confidence": conf,
+                "points":     [{"x": x1, "y": y1}, {"x": x2, "y": y2}],
+            })
+
+            # Try to get a precise polygon via SAM
+            try:
+                sam_inputs = self._sam_proc(
+                    images=image,
+                    input_boxes=[[box]],
+                    return_tensors="pt",
+                ).to(self._device)
+
+                with torch.no_grad():
+                    sam_out = self._sam_model(**sam_inputs)
+
+                masks = self._sam_proc.post_process_masks(
+                    sam_out.pred_masks.cpu(),
+                    sam_inputs["original_sizes"].cpu(),
+                    sam_inputs["reshaped_input_sizes"].cpu(),
+                )[0]
+
+                # Pick the mask with the highest predicted IoU
+                iou_scores = sam_out.iou_scores[0, 0].cpu().numpy()
+                best = int(np.argmax(iou_scores))
+                mask_arr = masks[0, best].numpy().astype(np.uint8)
+
+                pts = _binary_mask_to_polygon(mask_arr)
+                if pts:
+                    preds.append({
+                        "type":       "polygon",
+                        "label":      label,
+                        "confidence": conf,
+                        "points":     pts,
+                    })
+            except Exception:
+                pass  # SAM failed for this box — bounding box was already added
+
+        return preds
 
 
 class CustomModel(BaseAnnotationModel):

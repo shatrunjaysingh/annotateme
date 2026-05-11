@@ -20,9 +20,16 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel as PydanticModel
 
 from model import (
-    BaseAnnotationModel, MockModel, Prediction,
-    ProductionModel, YOLOWorldModel, active_model,
+    BaseAnnotationModel, GroundedSAMModel, MockModel, Prediction,
+    ProductionModel, SAM2Model, YOLOWorldModel, active_model,
 )
+
+# Detect optional heavy dependencies once at startup
+try:
+    import transformers as _transformers  # noqa: F401
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -58,11 +65,16 @@ def _get_model(name: str, classes: list[str] | None = None) -> BaseAnnotationMod
             return _registry[name]
 
         if name not in _registry:
-            log.info("Loading model '%s' for the first time…", name)
+            log.info("Loading model '%s' for the first time — may download weights…", name)
             if name == "mock":
                 _registry[name] = MockModel()
             elif name == "production":
                 _registry[name] = ProductionModel(weights="yolov8s-seg.pt", conf=0.01)
+            elif name == "sam2":
+                _registry[name] = SAM2Model()
+            elif name == "grounded-sam":
+                inst = GroundedSAMModel(classes=classes)
+                _registry[name] = inst
             elif name == "custom":
                 if not os.path.exists(CUSTOM_WEIGHTS):
                     raise FileNotFoundError(
@@ -72,8 +84,11 @@ def _get_model(name: str, classes: list[str] | None = None) -> BaseAnnotationMod
                 _registry[name] = ProductionModel(weights=CUSTOM_WEIGHTS, conf=0.01)
             else:
                 raise ValueError(
-                    f"Unknown model '{name}'. Valid: mock, production, yolo-world, custom, active"
+                    f"Unknown model '{name}'. Valid: mock, production, yolo-world, sam2, "
+                    "grounded-sam, custom, active"
                 )
+        elif name == "grounded-sam" and classes:
+            _registry[name].set_classes(classes)  # type: ignore[attr-defined]
         return _registry[name]
 
 
@@ -187,34 +202,34 @@ def list_models():
             {
                 "id": "sam2",
                 "name": "SAM 2",
-                "integrated": False,
-                "badge": "INTERACTIVE",
+                "integrated": HAS_TRANSFORMERS,
+                "badge": "ANY DOMAIN",
                 "badgeColor": "purple",
-                "tagline": "Click any object → instant precise polygon",
+                "tagline": "Automatic segmentation of every object — no prompts needed",
                 "description": (
-                    "Meta's Segment Anything Model 2. Click on any object in the canvas and it "
-                    "instantly traces a pixel-perfect polygon boundary. Works on any visual domain "
-                    "without fine-tuning — photos, cartoons, medical, satellite imagery. Also "
-                    "tracks objects across video frames."
+                    "Meta's Segment Anything Model 2. Automatically segments every visible object "
+                    "in an image without any text prompts or clicks. Works on any visual domain "
+                    "— photos, cartoons, medical scans, satellite imagery — without fine-tuning. "
+                    "Downloads ~185 MB on first use."
                 ),
-                "bestFor": "Any domain — the gold standard for interactive annotation",
-                "domains": "Any image or video, any domain",
+                "bestFor": "Any domain where you want to segment everything automatically",
+                "domains": "Any image, any domain, no prompts needed",
                 "supportsClasses": False,
             },
             {
                 "id": "grounded-sam",
                 "name": "Grounded SAM",
-                "integrated": False,
+                "integrated": HAS_TRANSFORMERS,
                 "badge": "BEST QUALITY",
                 "badgeColor": "purple",
                 "tagline": "Type a label → auto-detect + precise polygon",
                 "description": (
-                    "Combines Grounding DINO (open-vocabulary detection from text prompts) with "
-                    "SAM 2 (precise segmentation). Type what you want to detect and get "
-                    "pixel-perfect polygon masks across any domain. The most powerful option for "
-                    "zero-shot automatic annotation."
+                    "Combines Grounding DINO (zero-shot object detection from text) with SAM "
+                    "(precise polygon segmentation). Type what you want to detect and get "
+                    "pixel-perfect polygon masks on any domain — zero fine-tuning needed. "
+                    "Downloads ~750 MB total on first use."
                 ),
-                "bestFor": "Highest quality automatic annotation on any domain",
+                "bestFor": "Highest quality automatic annotation with custom label names",
                 "domains": "Any image, any label, any domain",
                 "supportsClasses": True,
             },

@@ -680,18 +680,18 @@ export default function AnnotationEditor() {
                 )}
               </div>
 
-              {/* YOLO-World class input */}
-              {aiModelName === 'yolo-world' && (
+              {/* Class input for models that support open-vocabulary detection */}
+              {aiModels.find((m: any) => m.id === aiModelName)?.supportsClasses && (
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', marginBottom: 4, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Classes to detect</div>
                   <input
                     type="text"
                     value={aiClasses}
                     onChange={e => setAiClasses(e.target.value)}
-                    placeholder="car, person, scratch, tumour…"
+                    placeholder="e.g. car, person, scratch, tumour…"
                     style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', border: '1px solid #d9d9d9', borderRadius: 5, fontSize: 11, outline: 'none' }}
                   />
-                  <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 3 }}>Comma-separated. Leave empty to use default classes.</div>
+                  <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 3 }}>Comma-separated. Leave empty to use model defaults.</div>
                 </div>
               )}
 

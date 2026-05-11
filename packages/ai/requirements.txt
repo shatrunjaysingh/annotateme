@@ -8,6 +8,12 @@ ultralytics==8.2.0        # YOLOv8 detection + segmentation
 pillow==10.3.0
 numpy<2.0
 
+# ── SAM 2 + Grounded SAM (optional — enables SAM2Model and GroundedSAMModel) ──
+# Uncomment to enable these models in the AI panel.
+# First use downloads ~185 MB (SAM 2) or ~750 MB (Grounded SAM) from HuggingFace.
+transformers>=4.40.0
+accelerate>=0.20.0
+
 # ── PyTorch — choose ONE of the three blocks below ───────────────────────────
 
 # CPU-only (works everywhere, ~2x slower inference):
