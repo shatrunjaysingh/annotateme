@@ -360,9 +360,11 @@ export default function AnnotationEditor() {
       setAiToast(toastMsg);
       setTimeout(() => setAiToast(null), isMock || newShapes.length === 0 ? 8000 : 4000);
     } catch (err: any) {
-      const msg = err.response?.data?.error || 'AI service unavailable';
+      const msg = err.response?.data?.error
+        || err.response?.data?.detail
+        || (err.response ? `HTTP ${err.response.status}` : 'AI service unavailable — is it running?');
       setAiToast(`Error: ${msg}`);
-      setTimeout(() => setAiToast(null), 5000);
+      setTimeout(() => setAiToast(null), 7000);
     } finally {
       setAiLoading(false);
     }

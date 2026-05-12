@@ -568,13 +568,23 @@ class GroundedSAMModel(BaseAnnotationModel):
         with torch.no_grad():
             dino_out = self._dino_model(**dino_inputs)
 
-        results = self._dino_proc.post_process_grounded_object_detection(
-            dino_out,
-            dino_inputs.input_ids,
-            box_threshold=self._box_thresh,
-            text_threshold=self._text_thresh,
-            target_sizes=[(image.height, image.width)],
-        )[0]
+        # transformers ≥4.45 renamed box_threshold → threshold
+        try:
+            results = self._dino_proc.post_process_grounded_object_detection(
+                dino_out,
+                dino_inputs.input_ids,
+                threshold=self._box_thresh,
+                text_threshold=self._text_thresh,
+                target_sizes=[(image.height, image.width)],
+            )[0]
+        except TypeError:
+            results = self._dino_proc.post_process_grounded_object_detection(
+                dino_out,
+                dino_inputs.input_ids,
+                box_threshold=self._box_thresh,
+                text_threshold=self._text_thresh,
+                target_sizes=[(image.height, image.width)],
+            )[0]
 
         boxes  = results["boxes"].cpu().tolist()
         labels = results["labels"]

@@ -171,8 +171,14 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
     });
 
     if (!aiResp.ok) {
-      const text = await aiResp.text();
-      res.status(502).json({ error: `AI service error: ${text}` });
+      let errMsg = `AI service error (HTTP ${aiResp.status})`;
+      try {
+        const body = await aiResp.json() as any;
+        errMsg = body.detail || body.error || errMsg;
+      } catch {
+        errMsg = (await aiResp.text()) || errMsg;
+      }
+      res.status(502).json({ error: errMsg });
       return;
     }
 
