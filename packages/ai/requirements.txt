@@ -11,7 +11,7 @@ numpy<2.0
 # ── SAM 2 + Grounded SAM (optional — enables SAM2Model and GroundedSAMModel) ──
 # Uncomment to enable these models in the AI panel.
 # First use downloads ~185 MB (SAM 2) or ~750 MB (Grounded SAM) from HuggingFace.
-transformers>=4.40.0
+transformers>=4.40.0,<5.0.0   # v5+ requires torch>=2.4; pin to v4 for torch 2.2 compat
 accelerate>=0.20.0
 
 # ── PyTorch — choose ONE of the three blocks below ───────────────────────────

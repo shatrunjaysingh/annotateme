@@ -19,15 +19,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel as PydanticModel
 
+# torch 2.2 is missing torch.compiler.is_compiling (added in 2.3).
+# transformers fast image processors call it; patch it before any import.
+import torch as _torch
+if not hasattr(_torch.compiler, "is_compiling"):
+    _torch.compiler.is_compiling = lambda: False
+
 from model import (
     BaseAnnotationModel, GroundedSAMModel, MockModel, Prediction,
     ProductionModel, SAM2Model, YOLOWorldModel, active_model,
 )
 
-# Detect optional heavy dependencies once at startup
+# Detect optional heavy dependencies once at startup.
+# transformers v5+ requires torch>=2.4; check the actual backend availability
+# rather than just the package import so the integrated flag is accurate.
 try:
-    import transformers as _transformers  # noqa: F401
-    HAS_TRANSFORMERS = True
+    from transformers.utils import is_torch_available as _is_torch_available
+    HAS_TRANSFORMERS = _is_torch_available()
 except ImportError:
     HAS_TRANSFORMERS = False
 
@@ -257,6 +265,8 @@ async def predict(
         model = _get_model(model_name, classes=parsed_classes)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     log.info(
         "Running %s on %dx%d image (%s bytes)%s",

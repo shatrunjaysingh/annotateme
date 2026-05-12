@@ -419,9 +419,9 @@ class SAM2Model(BaseAnnotationModel):
     def __init__(
         self,
         model_id: str = "facebook/sam2-hiera-small",
-        pred_iou_thresh: float = 0.70,
-        stability_score_thresh: float = 0.85,
-        points_per_batch: int = 32,
+        pred_iou_thresh: float = 0.50,
+        stability_score_thresh: float = 0.65,
+        points_per_batch: int = 64,
         device: str | None = None,
     ) -> None:
         try:
