@@ -298,17 +298,35 @@ async def predict(
 
     log.info("Returning %d / %d predictions (threshold=%.2f)", len(filtered), raw_count, confidence_threshold)
 
+    model_cls = type(model).__name__
     note: str | None = None
     if raw_count == 0:
-        note = (
-            "Model returned 0 detections. If this is a synthetic/cartoon image the COCO-trained "
-            "model won't detect objects — annotate frames manually then run train.py to fine-tune."
-        )
+        if model_cls == "SAM2Model":
+            note = (
+                "SAM 2 found no segments above quality thresholds. "
+                "Try lowering the confidence slider or use Grounded SAM with specific class names."
+            )
+        elif model_cls == "GroundedSAMModel":
+            note = (
+                "No objects matching your class names were detected. "
+                "Check spelling, be more specific (e.g. 'red car' instead of 'vehicle'), "
+                "or try broader terms."
+            )
+        elif model_cls in ("ProductionModel",):
+            note = (
+                "0 detections — the COCO-trained model only works on real photographs. "
+                "Synthetic/cartoon images need fine-tuning: annotate frames manually then run train.py."
+            )
+        elif model_cls == "YOLOWorldModel":
+            note = (
+                "No objects found for your class list. Try broader terms or check the image contains "
+                "recognisable real-world objects."
+            )
     elif len(filtered) == 0:
         confs = [p.get("confidence", 1.0) for p in raw_preds]
         note = (
             f"{raw_count} objects found but all below threshold {confidence_threshold:.2f} "
-            f"(highest was {max(confs):.4f}). Lower the confidence slider and try again."
+            f"(highest confidence: {max(confs):.4f}). Lower the confidence slider and try again."
         )
 
     return {
