@@ -4,6 +4,10 @@ import client from '../api/client';
 import AnnotationCanvas from '../components/AnnotationCanvas';
 import PointCloudCanvas, { Cuboid3D } from '../components/PointCloudCanvas';
 import { useAnnotationStore, ToolType } from '../store/annotationStore';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useAuthStore } from '../store/authStore';
+import TextAnnotationCanvas, { TextSpan } from '../components/TextAnnotationCanvas';
 
 interface JobInfo {
   id: string;
@@ -11,6 +15,10 @@ interface JobInfo {
   state: string;
   frameStart: number;
   frameEnd: number;
+  reviewNote?: string;
+  assignee?: { id: string; username: string };
+  validatedBy?: { id: string; username: string };
+  acceptedBy?: { id: string; username: string };
   task?: { id: string; name: string; frameCount: number; projectId?: string; project?: { id: string; name: string; labelSet: string[] } };
 }
 
@@ -43,7 +51,7 @@ export default function AnnotationEditor() {
   const [labels, setLabels] = useState<{ name: string; color: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState<'objects' | 'labels'>('objects');
+  const [activeTab, setActiveTab] = useState<'objects' | 'labels' | 'audit'>('objects');
 
   // Menu / panel state
   const [menuOpen, setMenuOpen] = useState(false);
@@ -99,12 +107,55 @@ export default function AnnotationEditor() {
   const [aiInfoOpen, setAiInfoOpen] = useState<string | null>(null); // model id with info expanded
   const [aiClasses, setAiClasses] = useState(''); // comma-separated classes for YOLO-World
 
+  // Copy/paste & help
+  const [clipboardShape, setClipboardShape] = useState<any | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [labelSearch, setLabelSearch] = useState('');
+
+  // Batch AI annotation
+  const [batchAiLoading, setBatchAiLoading] = useState(false);
+  const [batchAiProgress, setBatchAiProgress] = useState({ done: 0, total: 0 });
+
+  // Text annotation (for text/csv dataTypes)
+  const [textContent, setTextContent] = useState('');
+  const [textSpans, setTextSpans] = useState<TextSpan[]>([]);
+  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
+
+  // Review / validation mode
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
+  const [reviewNoteInput, setReviewNoteInput] = useState('');
+  const [annotationSummary, setAnnotationSummary] = useState<{ frameCount: number; totalShapes: number } | null>(null);
+
+  // Audit trail
+  interface AuditEntry {
+    id: string; action: string; note: string | null;
+    changes: Record<string, { from: unknown; to: unknown }> | null;
+    user: { id: string; username: string } | null;
+    createdAt: string;
+  }
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditOffset, setAuditOffset] = useState(0);
+  const AUDIT_PAGE = 30;
+  const dataType = (job?.task?.project as any)?.dataType?.toLowerCase() || '';
+  const isTextMode = dataType === 'text' || dataType === 'csv';
+
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const frameLoadingRef = useRef(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   // Track IDs of shapes added by the last AI Annotate run so we can replace them next time
   const aiShapeIds = useRef<string[]>([]);
+
+  const toast = useToast();
+  const toastRef = useRef(toast);
+  useEffect(() => { toastRef.current = toast; }, [toast]);
+  const confirm = useConfirm();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === 'admin' || user?.role === 'manager';
+  const isEditable = !job || job.stage === 'annotation';
 
   const {
     currentTool, setTool, setLabel, selectedLabel, selectedLabelColor,
@@ -119,6 +170,11 @@ export default function AnnotationEditor() {
       try {
         const { data: j } = await client.get(`/jobs/${jobId}`);
         setJob(j);
+        if (j.state === 'new') {
+          client.patch(`/jobs/${jobId}`, { state: 'in_progress' }).then(() => {
+            setJob(prev => prev ? { ...prev, state: 'in_progress' } : prev);
+          }).catch(() => {});
+        }
         const labelSet = j.task?.project?.labelSet || [];
         const lbls = labelSet.map((name: string, i: number) => ({ name, color: DEFAULT_COLORS[i % DEFAULT_COLORS.length] }));
         setLabels(lbls);
@@ -131,6 +187,8 @@ export default function AnnotationEditor() {
           const { data: f } = await client.get(`/files/task/${j.task.id}`);
           setFiles(f);
         }
+        // Start on the job's assigned first frame, not frame 0
+        setFrameNum(j.frameStart ?? 0);
       } catch { navigate(-1); }
     };
     load();
@@ -143,20 +201,69 @@ export default function AnnotationEditor() {
     }).catch(() => {});
   }, []);
 
-  // Load frame annotations
+  // Load annotation summary for validation/acceptance mode
+  useEffect(() => {
+    if (!jobId || !job || job.stage === 'annotation') return;
+    client.get(`/annotations/job/${jobId}`).then(({ data }) => {
+      const totalShapes = (data.frames || []).reduce((sum: number, f: any) => sum + (f.shapes?.length || 0), 0);
+      setAnnotationSummary({ frameCount: data.frameCount || 0, totalShapes });
+    }).catch(() => {});
+  }, [jobId, job?.stage]);
+
+  // Load audit entries when the audit tab is opened (or on first open)
+  const fetchAudit = useCallback(async (offset = 0, append = false) => {
+    if (!jobId) return;
+    setAuditLoading(true);
+    try {
+      const { data } = await client.get(`/audits/jobs/${jobId}`, { params: { limit: AUDIT_PAGE, offset } });
+      setAuditTotal(data.total);
+      setAuditOffset(offset + data.entries.length);
+      setAuditEntries(prev => append ? [...prev, ...data.entries] : data.entries);
+    } catch { /* no-op */ }
+    finally { setAuditLoading(false); }
+  }, [jobId]);
+
+  useEffect(() => {
+    if (activeTab === 'audit' && jobId && auditEntries.length === 0) {
+      fetchAudit(0, false);
+    }
+  }, [activeTab, jobId]);
+
+  // Load frame annotations — isCurrent prevents stale responses from overwriting a later frame
   useEffect(() => {
     if (!jobId) return;
+    let isCurrent = true;
+    frameLoadingRef.current = true;
     clearShapes();
-    aiShapeIds.current = []; // AI shapes from previous frame are gone
+    aiShapeIds.current = [];
     const load = async () => {
       try {
         const { data } = await client.get(`/jobs/${jobId}/frame/${frameNum}`);
+        if (!isCurrent) return;
         setShapes(data.shapes || []);
         setCuboids(data.cuboids || []);
-      } catch { /* cleared above */ }
+        if (data.textSpans) setTextSpans(data.textSpans);
+      } catch (err: any) {
+        if (isCurrent && err?.response?.status !== 404) {
+          toastRef.current.error('Failed to load annotations', 'Could not fetch frame data from the server.');
+        }
+      } finally {
+        if (isCurrent) frameLoadingRef.current = false;
+      }
     };
     load();
+    return () => { isCurrent = false; };
   }, [jobId, frameNum, setShapes, clearShapes]);
+
+  // Load text content for text/csv frames
+  useEffect(() => {
+    if (!isTextMode) return;
+    const f = files[frameNum];
+    if (!f) { setTextContent(''); return; }
+    client.get(`/files/${f.id}/text`).then(({ data }) => {
+      setTextContent(data.content || '');
+    }).catch(() => setTextContent(''));
+  }, [isTextMode, files, frameNum]);
 
   // Load PCD point cloud for current frame when in 3D mode
   useEffect(() => {
@@ -188,18 +295,25 @@ export default function AnnotationEditor() {
 
   // Auto-save
   const saveAnnotations = useCallback(async (silent = false) => {
-    if (!jobId) return;
+    if (!jobId || !isEditable) return;
     if (!silent) setSaving(true);
     try {
       await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes, cuboids, tags: [], tracks: [] });
+      // Auto-reopen: annotation stage job that was marked completed gets reset to in_progress
+      if (job?.stage === 'annotation' && job?.state === 'completed') {
+        setJob(j => j ? { ...j, state: 'in_progress' } : j);
+        if (!silent) toastRef.current.info('Job reopened', 'Annotations edited after completion — state reset to in progress.');
+      }
       if (!silent) { setSaved(true); setTimeout(() => setSaved(false), 2000); }
     } catch { /* no-op */ }
     finally { if (!silent) setSaving(false); }
-  }, [jobId, frameNum, shapes, cuboids]);
+  }, [jobId, frameNum, shapes, cuboids, isEditable, job?.stage, job?.state, setJob]);
 
   useEffect(() => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = setTimeout(() => saveAnnotations(true), 3000);
+    autoSaveTimer.current = setTimeout(() => {
+      if (!frameLoadingRef.current) saveAnnotations(true);
+    }, 3000);
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
   }, [shapes, saveAnnotations]);
 
@@ -243,13 +357,16 @@ export default function AnnotationEditor() {
 
   // Frame navigation
   const goToFrame = useCallback(async (n: number) => {
-    const clamped = Math.max(0, Math.min(n, files.length - 1));
+    const lo = job?.frameStart ?? 0;
+    const hi = job?.frameEnd ?? (files.length - 1);
+    const clamped = Math.max(lo, Math.min(n, hi));
     if (clamped === frameNum) return;
-    if (jobId) {
+    // Only save if the frame has fully loaded — avoids overwriting annotations with an empty array
+    if (jobId && !frameLoadingRef.current && isEditable) {
       try { await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes, cuboids, tags: [], tracks: [] }); } catch { /* no-op */ }
     }
     setFrameNum(clamped);
-  }, [jobId, frameNum, shapes, cuboids, files.length]);
+  }, [jobId, frameNum, shapes, cuboids, files.length, job?.frameStart, job?.frameEnd, isEditable]);
 
   // Play mode
   useEffect(() => {
@@ -268,20 +385,69 @@ export default function AnnotationEditor() {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      // Undo / Redo — wired here so they work even when toolbar has focus
+      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); return; }
+      if (e.ctrlKey && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) { e.preventDefault(); redo(); return; }
+
+      // Copy / Paste selected shape
+      if (e.ctrlKey && e.key === 'c') {
+        const sel = shapes.find(s => s.id === selectedShapeId);
+        if (sel) { setClipboardShape({ ...sel }); toast.info('Copied', `${sel.type} shape copied`); }
+        return;
+      }
+      if (e.ctrlKey && e.key === 'v') {
+        setClipboardShape((cb: any) => {
+          if (!cb) return cb;
+          const newShape = { ...cb, id: crypto.randomUUID(), points: cb.points.map((p: any) => ({ x: p.x + 12, y: p.y + 12 })) };
+          addShape(newShape);
+          selectShape(newShape.id);
+          return cb;
+        });
+        return;
+      }
+
+      // Tab — cycle through shapes
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        if (shapes.length === 0) return;
+        const idx = shapes.findIndex(s => s.id === selectedShapeId);
+        const next = e.shiftKey
+          ? (idx <= 0 ? shapes.length - 1 : idx - 1)
+          : (idx >= shapes.length - 1 ? 0 : idx + 1);
+        selectShape(shapes[next].id);
+        setActiveTab('objects');
+        return;
+      }
+
+      // Number keys 1-9 — assign label by index to selected shape
+      if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.altKey) {
+        const lbl = labels[parseInt(e.key) - 1];
+        if (lbl && selectedShapeId) {
+          updateShape(selectedShapeId, { label: lbl.name, color: lbl.color });
+          setLabel(lbl.name, lbl.color);
+          toast.success('Label assigned', `→ ${lbl.name}`);
+        }
+        return;
+      }
+
+      // ? — toggle keyboard help modal
+      if (e.key === '?') { setShowHelp(h => !h); return; }
+
       // 2D tool keys only fire in 2D mode (avoids conflict with 3D nudge keys)
       if (viewMode === '2d') {
         const toolMap: Record<string, ToolType> = { s: 'select', r: 'rect', p: 'polygon', l: 'polyline', d: 'point', e: 'ellipse' };
         const tool = toolMap[e.key.toLowerCase()];
-        if (tool) setTool(tool);
+        if (tool) { setTool(tool); return; }
       }
       if (e.key === 'ArrowLeft') goToFrame(frameNum - 1);
       if (e.key === 'ArrowRight') goToFrame(frameNum + 1);
       if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveAnnotations(); }
-      if (e.key === 'Escape') setMenuOpen(false);
+      if (e.key === 'Escape') { setMenuOpen(false); setShowHelp(false); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [viewMode, setTool, goToFrame, saveAnnotations, frameNum]);
+  }, [viewMode, setTool, goToFrame, saveAnnotations, frameNum, shapes, selectedShapeId, labels, clipboardShape, undo, redo, updateShape, setLabel, addShape, selectShape, toast]);
 
   // Click outside menu
   useEffect(() => {
@@ -322,10 +488,11 @@ export default function AnnotationEditor() {
       }
       const { data: fd } = await client.get(`/jobs/${jobId}/frame/${frameNum}`);
       setShapes(fd.shapes || []);
-    } catch { alert('Failed to import annotations. Check the file format.'); }
+      toast.success('Imported', `Annotations loaded from ${file.name}`);
+    } catch { toast.error('Import failed', 'Check the file is a valid AnnotateMe JSON export'); }
     setMenuOpen(false);
     e.target.value = '';
-  }, [jobId, frameNum, setShapes]);
+  }, [jobId, frameNum, setShapes, toast]);
 
   const handleExport = useCallback(async () => {
     if (!jobId) return;
@@ -334,9 +501,10 @@ export default function AnnotationEditor() {
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/json' }));
       const a = document.createElement('a'); a.href = url; a.download = `job-${jobId}-annotations.json`; a.click();
       URL.revokeObjectURL(url);
-    } catch { alert('Export failed'); }
+      toast.success('Exported', 'Annotation file downloaded');
+    } catch { toast.error('Export failed', 'Could not download annotations'); }
     setMenuOpen(false);
-  }, [jobId]);
+  }, [jobId, toast]);
 
   const handleAutoAnnotate = useCallback(async () => {
     if (!jobId) return;
@@ -372,13 +540,15 @@ export default function AnnotationEditor() {
 
   const handleRemoveAll = useCallback(async () => {
     if (!jobId) return;
-    if (!confirm('Remove ALL annotations from this job? This cannot be undone.')) return;
+    const ok = await confirm({ title: 'Remove all annotations', message: 'Remove ALL annotations from this job? This cannot be undone.', variant: 'danger', confirmLabel: 'Remove all' });
+    if (!ok) return;
     try {
       await client.delete(`/jobs/${jobId}/annotations`);
       clearShapes();
-    } catch { alert('Failed to remove annotations'); }
+      toast.success('Cleared', 'All annotations removed');
+    } catch { toast.error('Failed', 'Could not remove annotations'); }
     setMenuOpen(false);
-  }, [jobId, clearShapes]);
+  }, [jobId, clearShapes, confirm, toast]);
 
   const handleChangeState = useCallback(async (state: string) => {
     if (!jobId) return;
@@ -386,10 +556,28 @@ export default function AnnotationEditor() {
     try {
       await client.patch(`/jobs/${jobId}`, { state });
       setJob(j => j ? { ...j, state } : j);
+      toast.success('State updated', state.replace('_', ' '));
     } catch (err: any) {
-      alert(`Failed to change state: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+      toast.error('Failed to change state', err?.response?.data?.error || err?.message || 'Unknown error');
     }
-  }, [jobId]);
+  }, [jobId, toast]);
+
+  const handleResetToAnnotation = useCallback(async () => {
+    if (!jobId) return;
+    const ok = await confirm({
+      title: 'Reset job to annotation?',
+      message: 'This will move the job back to annotation stage and mark it as in progress. The annotator will need to re-submit through the full review workflow.',
+      confirmLabel: 'Reset to annotation',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await client.patch(`/jobs/${jobId}`, { stage: 'annotation', state: 'in_progress' });
+      setJob(j => j ? { ...j, stage: 'annotation', state: 'in_progress' } : j);
+      toast.success('Job reset', 'Job is now back in annotation stage.');
+      setMenuOpen(false);
+    } catch { toast.error('Failed to reset', 'Could not reset job to annotation stage.'); }
+  }, [jobId, confirm, toast]);
 
   const handleFinishJob = useCallback(async () => {
     if (!jobId) return;
@@ -399,6 +587,70 @@ export default function AnnotationEditor() {
       navigate(-1);
     } catch { navigate(-1); }
   }, [jobId, saveAnnotations, navigate]);
+
+  const handleSubmitForReview = useCallback(async () => {
+    if (!jobId) return;
+    const ok = await confirm({
+      title: 'Submit for review?',
+      message: 'This will mark the job as complete and send it to validation. A reviewer will check your annotations.',
+      confirmLabel: 'Submit for review',
+    });
+    if (!ok) return;
+    try {
+      await saveAnnotations(true);
+      await client.patch(`/jobs/${jobId}`, { state: 'completed', stage: 'validation' });
+      setJob(j => j ? { ...j, state: 'completed', stage: 'validation' } : j);
+      toast.success('Submitted for review', 'A validator will check your annotations.');
+      setMenuOpen(false);
+      navigate(-1);
+    } catch { toast.error('Failed to submit', 'Could not update job state.'); }
+  }, [jobId, saveAnnotations, confirm, toast, navigate]);
+
+  const handleApprove = useCallback(async () => {
+    if (!jobId || !job) return;
+    const isValidation = job.stage === 'validation';
+    const ok = await confirm({
+      title: isValidation ? 'Approve validation?' : 'Accept annotations?',
+      message: isValidation
+        ? 'Validation passed. The job will move to acceptance review for final sign-off.'
+        : 'Accept these annotations as final. The job will be fully completed.',
+      confirmLabel: isValidation ? 'Move to Acceptance' : 'Accept & Complete',
+    });
+    if (!ok) return;
+    try {
+      await saveAnnotations(true);
+      if (isValidation) {
+        // Validation approved → send to acceptance review (not yet completed)
+        await client.patch(`/jobs/${jobId}`, { stage: 'acceptance', state: 'new', reviewNote: '', validatedById: user?.id });
+        setJob(j => j ? { ...j, stage: 'acceptance', state: 'new', reviewNote: '', validatedBy: user ? { id: user.id, username: user.username } : j?.validatedBy } : j);
+        toast.success('Validation approved', 'Job moved to acceptance review.');
+      } else {
+        // Acceptance approved → job is fully done
+        await client.patch(`/jobs/${jobId}`, { stage: 'acceptance', state: 'completed', reviewNote: '', acceptedById: user?.id });
+        setJob(j => j ? { ...j, stage: 'acceptance', state: 'completed', reviewNote: '', acceptedBy: user ? { id: user.id, username: user.username } : j?.acceptedBy } : j);
+        toast.success('Accepted', 'Job fully accepted and completed.');
+      }
+      navigate(-1);
+    } catch { toast.error('Failed to approve', 'Could not update job state.'); }
+  }, [jobId, job, user?.id, saveAnnotations, confirm, toast, navigate]);
+
+  const handleRequestChanges = useCallback(async () => {
+    if (!jobId) return;
+    setShowReviewDialog(true);
+  }, [jobId]);
+
+  const handleSubmitRequestChanges = useCallback(async () => {
+    if (!jobId) return;
+    try {
+      // Always reset to annotation stage so the annotator can edit again
+      await client.patch(`/jobs/${jobId}`, { stage: 'annotation', state: 'rejected', reviewNote: reviewNoteInput.trim() });
+      setJob(j => j ? { ...j, stage: 'annotation', state: 'rejected', reviewNote: reviewNoteInput.trim() } : j);
+      setShowReviewDialog(false);
+      setReviewNoteInput('');
+      toast.success('Changes requested', 'The annotator will be notified and can now edit the job.');
+      navigate(-1);
+    } catch { toast.error('Failed to request changes', 'Could not update job state.'); }
+  }, [jobId, reviewNoteInput, toast, navigate]);
 
   const handleOpenTask = useCallback(() => {
     const pid = job?.task?.project?.id;
@@ -421,6 +673,43 @@ export default function AnnotationEditor() {
     } catch { /* no-op */ }
     setAddingLabel(false);
   }, [newLabelName, job, labels.length, setLabel]);
+
+  // Batch AI annotation — annotate every frame in the job
+  const handleBatchAutoAnnotate = useCallback(async () => {
+    if (!jobId || files.length === 0) return;
+    const total = files.length;
+    const ok = await confirm({ title: 'Batch AI Annotate', message: `Run AI on all ${total} frames? Existing AI-generated annotations will be replaced.`, variant: 'warning', confirmLabel: `Annotate ${total} frames` });
+    if (!ok) return;
+    setBatchAiLoading(true);
+    setBatchAiProgress({ done: 0, total });
+    setAiPanelOpen(false);
+    let succeeded = 0;
+    for (let i = 0; i < total; i++) {
+      try {
+        await client.post('/ai/annotate', { jobId, frameIndex: i, confidenceThreshold: aiConf, modelName: aiModelName, classes: aiClasses || undefined });
+        succeeded++;
+      } catch { /* skip failed frames */ }
+      setBatchAiProgress({ done: i + 1, total });
+    }
+    setBatchAiLoading(false);
+    setBatchAiProgress({ done: 0, total: 0 });
+    // Reload current frame to show new annotations
+    try {
+      const { data } = await client.get(`/jobs/${jobId}/frame/${frameNum}`);
+      setShapes(data.shapes || []);
+    } catch { /* no-op */ }
+    toast.success('Batch complete', `${succeeded}/${total} frames annotated`);
+  }, [jobId, files.length, aiConf, aiModelName, aiClasses, frameNum, setShapes, confirm, toast]);
+
+  // Copy all shapes on current frame to the next frame
+  const handleCopyToNextFrame = useCallback(async () => {
+    if (!jobId || shapes.length === 0 || frameNum >= files.length - 1) return;
+    const nextFrame = frameNum + 1;
+    try {
+      await client.post(`/jobs/${jobId}/frame/${nextFrame}`, { shapes, cuboids, tags: [], tracks: [] });
+      toast.success('Copied to next frame', `${shapes.length} shape${shapes.length !== 1 ? 's' : ''} → frame ${nextFrame + 1}`);
+    } catch { toast.error('Copy failed', 'Could not copy shapes to the next frame'); }
+  }, [jobId, frameNum, shapes, cuboids, files.length, toast]);
 
   // Hide/lock all
   const toggleAllHidden = useCallback(() => {
@@ -506,7 +795,7 @@ export default function AnnotationEditor() {
                 Remove annotations
               </button>
               <button style={menuItemStyle}
-                onClick={() => { alert('Run actions: no automated actions configured for this job.'); setMenuOpen(false); }}
+                onClick={() => { toast.info('Run actions', 'No automated actions configured for this job'); setMenuOpen(false); }}
                 onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
                 onMouseLeave={e => (e.currentTarget.style.background = '')}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -544,12 +833,33 @@ export default function AnnotationEditor() {
                 )}
               </div>
               <div style={{ height: 1, background: '#f0f0f0', margin: '4px 0' }} />
-              <button style={{ ...menuItemStyle, color: '#52c41a', fontWeight: 600 }} onClick={handleFinishJob}
-                onMouseEnter={e => (e.currentTarget.style.background = '#f6ffed')}
-                onMouseLeave={e => (e.currentTarget.style.background = '')}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
-                Finish the job
-              </button>
+              {isEditable && (
+                <>
+                  <button style={{ ...menuItemStyle, color: '#1890ff', fontWeight: 600 }} onClick={handleSubmitForReview}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#e6f4ff')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '')}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>
+                    Submit for validation
+                  </button>
+                  <button style={{ ...menuItemStyle, color: '#52c41a', fontWeight: 600 }} onClick={handleFinishJob}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#f6ffed')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '')}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    Finish the job
+                  </button>
+                </>
+              )}
+              {!isEditable && isAdmin && (
+                <>
+                  <div style={{ height: 1, background: '#f0f0f0', margin: '4px 0' }} />
+                  <button style={{ ...menuItemStyle, color: '#ff4d4f', fontWeight: 600 }} onClick={handleResetToAnnotation}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#fff1f0')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '')}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+                    Reset to annotation (in progress)
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -588,7 +898,7 @@ export default function AnnotationEditor() {
               ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><circle cx="12" cy="12" r="10" strokeDasharray="31.4" strokeDashoffset="10"/></svg>
               : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
             }
-            {aiLoading ? 'Detecting…' : 'AI Annotate'}
+            {aiLoading ? 'Detecting…' : `AI Annotate (${aiModelName})`}
           </button>
           {/* Settings chevron */}
           <button
@@ -627,7 +937,11 @@ export default function AnnotationEditor() {
                       return (
                         <div key={m.id}>
                           <div
-                            onClick={() => !isDisabled && setAiModelName(m.id)}
+                            onClick={() => {
+                              if (isDisabled) return;
+                              setAiModelName(m.id);
+                              if (m.defaultConfidence != null) setAiConf(m.defaultConfidence);
+                            }}
                             style={{
                               display: 'flex', alignItems: 'flex-start', gap: 8,
                               cursor: isDisabled ? 'not-allowed' : 'pointer',
@@ -640,7 +954,11 @@ export default function AnnotationEditor() {
                             <input
                               type="radio" name="aiModel" value={m.id}
                               checked={isSelected} disabled={isDisabled}
-                              onChange={() => !isDisabled && setAiModelName(m.id)}
+                              onChange={() => {
+                                if (isDisabled) return;
+                                setAiModelName(m.id);
+                                if (m.defaultConfidence != null) setAiConf(m.defaultConfidence);
+                              }}
                               style={{ marginTop: 3, accentColor: '#2563EB', flexShrink: 0 }}
                             />
                             <div style={{ flex: 1, minWidth: 0 }}>
@@ -701,36 +1019,58 @@ export default function AnnotationEditor() {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#262626', marginBottom: 4 }}>
                   <span>Confidence threshold</span>
-                  <span style={{ fontWeight: 600, color: '#2563EB' }}>{(aiConf * 100).toFixed(0)}%</span>
+                  <span style={{ fontWeight: 600, color: '#2563EB' }}>{(aiConf * 100).toFixed(0) === '0' ? '<1' : (aiConf * 100).toFixed(0)}%</span>
                 </div>
                 <input
-                  type="range" min="0.05" max="0.95" step="0.05"
+                  type="range" min="0.01" max="0.95" step="0.01"
                   value={aiConf}
                   onChange={e => setAiConf(parseFloat(e.target.value))}
                   style={{ width: '100%', accentColor: '#2563EB' }}
                 />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#8c8c8c', marginTop: 2 }}>
-                  <span>5% — more detections</span>
+                  <span>1% — more detections</span>
                   <span>95% — fewer, surer</span>
                 </div>
+                {aiConf <= 0.03 && (
+                  <div style={{ fontSize: 10, color: '#875500', background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 4, padding: '3px 6px', marginTop: 4 }}>
+                    Very low threshold — expect more false positives. Good for YOLO-World.
+                  </div>
+                )}
               </div>
 
               {/* Quick presets */}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
-                {[['Low (10%)', 0.10], ['Medium (25%)', 0.25], ['High (50%)', 0.50]].map(([label, v]) => (
-                  <button key={String(v)} onClick={() => setAiConf(v as number)}
+                {([['1%', 0.01], ['5%', 0.05], ['25%', 0.25], ['50%', 0.50]] as [string, number][]).map(([label, v]) => (
+                  <button key={String(v)} onClick={() => setAiConf(v)}
                     style={{ fontSize: 11, padding: '3px 8px', border: `1px solid ${aiConf === v ? '#2563EB' : '#d9d9d9'}`, borderRadius: 4, background: aiConf === v ? '#e6f4ff' : '#fff', color: aiConf === v ? '#2563EB' : '#595959', cursor: 'pointer' }}>
-                    {label as string}
+                    {label}
                   </button>
                 ))}
               </div>
 
-              <button
-                onClick={() => { setAiPanelOpen(false); handleAutoAnnotate(); }}
-                disabled={aiLoading}
-                style={{ position: 'sticky', bottom: 0, width: '100%', padding: '7px 0', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: aiLoading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, boxShadow: '0 -4px 8px rgba(255,255,255,0.9)' }}>
-                Run AI Annotate
-              </button>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                <button
+                  onClick={() => { setAiPanelOpen(false); handleAutoAnnotate(); }}
+                  disabled={aiLoading || batchAiLoading}
+                  style={{ flex: 1, padding: '7px 0', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: (aiLoading || batchAiLoading) ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  {aiLoading ? 'Detecting…' : 'This frame'}
+                </button>
+                <button
+                  onClick={handleBatchAutoAnnotate}
+                  disabled={aiLoading || batchAiLoading || files.length === 0}
+                  title={`Annotate all ${files.length} frames`}
+                  style={{ flex: 1, padding: '7px 0', background: batchAiLoading ? '#f0f0f0' : '#f0fdf4', color: batchAiLoading ? '#8c8c8c' : '#16a34a', border: '1px solid #86efac', borderRadius: 6, cursor: (aiLoading || batchAiLoading) ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  {batchAiLoading ? `${batchAiProgress.done}/${batchAiProgress.total}` : `All ${files.length} frames`}
+                </button>
+              </div>
+              {batchAiLoading && batchAiProgress.total > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ height: 4, background: '#e8e8e8', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', background: '#16a34a', borderRadius: 2, transition: 'width 0.3s', width: `${(batchAiProgress.done / batchAiProgress.total) * 100}%` }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 3 }}>Annotating frame {batchAiProgress.done} of {batchAiProgress.total}…</div>
+                </div>
+              )}
 
               {/* Fine-tune guide */}
               <details style={{ marginTop: 12 }}>
@@ -879,6 +1219,130 @@ export default function AnnotationEditor() {
         </div>
       </div>
 
+      {/* REVIEW MODE BANNER */}
+      {job && job.stage !== 'annotation' && (() => {
+        const fullyAccepted = job.stage === 'acceptance' && job.state === 'completed';
+
+        // Fully accepted — show audit trail, no action buttons
+        if (fullyAccepted) {
+          return (
+            <div style={{ background: '#f6ffed', borderBottom: '2px solid #52c41a', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#52c41a" strokeWidth="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              <span style={{ fontWeight: 700, fontSize: 13, color: '#389e0d' }}>Fully Accepted</span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {job.assignee && (
+                  <span style={{ fontSize: 12, color: '#595959', background: '#fff', border: '1px solid #b7eb8f', borderRadius: 4, padding: '2px 8px' }}>
+                    Annotated by <strong>{job.assignee.username}</strong>
+                  </span>
+                )}
+                {job.validatedBy && (
+                  <span style={{ fontSize: 12, color: '#595959', background: '#fff', border: '1px solid #b7eb8f', borderRadius: 4, padding: '2px 8px' }}>
+                    Validated by <strong>{job.validatedBy.username}</strong>
+                  </span>
+                )}
+                {job.acceptedBy && (
+                  <span style={{ fontSize: 12, color: '#595959', background: '#fff', border: '1px solid #b7eb8f', borderRadius: 4, padding: '2px 8px' }}>
+                    Accepted by <strong>{job.acceptedBy.username}</strong>
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        // Active review (validation or acceptance pending)
+        const isAcceptance = job.stage === 'acceptance';
+        const bannerColor = isAcceptance ? '#52c41a' : '#fa8c16';
+        const bannerBg = isAcceptance ? '#f6ffed' : '#fff7e6';
+        const bannerText = isAcceptance ? '#389e0d' : '#d46b08';
+        const reviewLabel = isAcceptance ? 'Acceptance review' : 'Validation review';
+
+        return isAdmin ? (
+          <div style={{ background: bannerBg, borderBottom: `2px solid ${bannerColor}`, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={bannerColor} strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span style={{ fontWeight: 600, fontSize: 13, color: bannerText }}>
+              {reviewLabel}{job.assignee ? ` — annotated by ${job.assignee.username}` : ''}
+            </span>
+            {job.validatedBy && (
+              <span style={{ fontSize: 12, color: '#595959', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, padding: '2px 8px' }}>
+                Validated by <strong>{job.validatedBy.username}</strong>
+              </span>
+            )}
+            {annotationSummary !== null && (
+              <span style={{ fontSize: 12, color: '#595959', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, padding: '2px 8px' }}>
+                {annotationSummary.frameCount === 0
+                  ? 'No frames annotated yet'
+                  : `${annotationSummary.frameCount} frame${annotationSummary.frameCount !== 1 ? 's' : ''} annotated · ${annotationSummary.totalShapes} shape${annotationSummary.totalShapes !== 1 ? 's' : ''} total`}
+              </span>
+            )}
+            {job.reviewNote && (
+              <span style={{ fontSize: 12, color: '#595959', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, padding: '2px 8px', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                Note: {job.reviewNote}
+              </span>
+            )}
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button onClick={handleRequestChanges}
+                style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #ff4d4f', background: '#fff', color: '#ff4d4f', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                Request Changes
+              </button>
+              <button onClick={handleApprove}
+                style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#52c41a', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                {isAcceptance ? 'Accept' : 'Approve'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ background: '#fff1f0', borderBottom: '2px solid #ff4d4f', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#cf1322' }}>
+              This job is in {job.stage} review — editing is locked
+            </span>
+            <span style={{ fontSize: 12, color: '#595959' }}>
+              An admin must reset it to annotation stage before you can make changes.
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* REVIEWER FEEDBACK BANNER — shown to annotator when rejected */}
+      {job && job.stage === 'annotation' && job.state === 'rejected' && job.reviewNote && (
+        <div style={{ background: '#fff1f0', borderBottom: '2px solid #ff4d4f', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span style={{ fontWeight: 600, fontSize: 13, color: '#cf1322' }}>Reviewer requested changes:</span>
+          <span style={{ fontSize: 13, color: '#595959' }}>{job.reviewNote}</span>
+        </div>
+      )}
+
+      {/* REQUEST CHANGES DIALOG */}
+      {showReviewDialog && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 440, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 700 }}>Request Changes</h3>
+            <p style={{ margin: '0 0 14px', color: '#595959', fontSize: 13 }}>Describe what needs to be fixed. The annotator will see this feedback.</p>
+            <textarea
+              autoFocus
+              value={reviewNoteInput}
+              onChange={e => setReviewNoteInput(e.target.value)}
+              placeholder="e.g. The car on the left is missing a label. Polygon on frame 3 is too rough."
+              rows={4}
+              style={{ width: '100%', borderRadius: 6, border: '1px solid #d9d9d9', padding: '8px 10px', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+              <button onClick={() => { setShowReviewDialog(false); setReviewNoteInput(''); }}
+                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid #d9d9d9', background: '#fff', cursor: 'pointer', fontSize: 13 }}>
+                Cancel
+              </button>
+              <button onClick={handleSubmitRequestChanges}
+                style={{ padding: '6px 16px', borderRadius: 6, border: 'none', background: '#ff4d4f', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                Request Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MAIN AREA */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
@@ -887,7 +1351,8 @@ export default function AnnotationEditor() {
           {viewMode === '2d' ? (
             (Object.keys(TOOL_ICONS) as ToolType[]).map(tool => (
               <button key={tool} title={tool === 'select' ? 'Select (S) — click a shape to select it, drag to move, drag handles to resize' : `${TOOL_LABELS[tool]} (${TOOL_KEYS[tool]})`}
-                style={{ width: 36, height: 36, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: currentTool === tool ? '#e6f4ff' : 'transparent', color: currentTool === tool ? '#1890ff' : '#595959', transition: 'all 0.15s', position: 'relative' }}
+                disabled={!isEditable}
+                style={{ width: 36, height: 36, border: 'none', borderRadius: 6, cursor: isEditable ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', background: currentTool === tool ? '#e6f4ff' : 'transparent', color: currentTool === tool ? '#1890ff' : '#595959', transition: 'all 0.15s', position: 'relative', opacity: isEditable ? 1 : 0.4 }}
                 onClick={() => setTool(tool)}>
                 {TOOL_ICONS[tool]}
                 {currentTool === tool && <span style={{ position: 'absolute', left: 2, top: '50%', transform: 'translateY(-50%)', width: 3, height: 20, background: '#1890ff', borderRadius: 2 }} />}
@@ -965,6 +1430,16 @@ export default function AnnotationEditor() {
 
         {/* CANVAS AREA */}
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          {/* Read-only overlay for annotators when job is in review */}
+          {!isEditable && !isAdmin && (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: 'rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, pointerEvents: 'all', cursor: 'not-allowed' }}>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="1.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              <span style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>Editing locked</span>
+              <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: 13, textAlign: 'center', maxWidth: 280 }}>
+                This job is in {job?.stage} review.<br />An admin must reset it to annotation to allow editing.
+              </span>
+            </div>
+          )}
           {viewMode === '3d' ? (
             <>
               {pcdLoading && (
@@ -996,6 +1471,18 @@ export default function AnnotationEditor() {
                 onExpandView={setExpandedView}
               />
             </>
+          ) : isTextMode ? (
+            <TextAnnotationCanvas
+              text={textContent}
+              spans={textSpans}
+              labels={labels}
+              selectedLabel={selectedLabel || ''}
+              selectedLabelColor={selectedLabelColor || '#1890ff'}
+              selectedSpanId={selectedSpanId}
+              onAddSpan={span => setTextSpans(prev => [...prev, span])}
+              onDeleteSpan={id => setTextSpans(prev => prev.filter(s => s.id !== id))}
+              onSelectSpan={setSelectedSpanId}
+            />
           ) : (
             <AnnotationCanvas
               imageUrl={imageUrl}
@@ -1066,12 +1553,14 @@ export default function AnnotationEditor() {
         <div style={{ width: 280, background: '#fff', borderLeft: '1px solid #e8e8e8', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
           {/* Tabs */}
           <div style={{ display: 'flex', borderBottom: '1px solid #e8e8e8', flexShrink: 0 }}>
-            {(['objects', 'labels'] as const).map(tab => (
+            {(['objects', 'labels', 'audit'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
-                style={{ flex: 1, padding: '10px 0', background: 'none', border: 'none', borderBottom: activeTab === tab ? '2px solid #1890ff' : '2px solid transparent', color: activeTab === tab ? '#1890ff' : '#8c8c8c', cursor: 'pointer', fontSize: 13, fontWeight: activeTab === tab ? 600 : 400, textTransform: 'capitalize', transition: 'all 0.15s' }}>
+                style={{ flex: 1, padding: '10px 0', background: 'none', border: 'none', borderBottom: activeTab === tab ? '2px solid #1890ff' : '2px solid transparent', color: activeTab === tab ? '#1890ff' : '#8c8c8c', cursor: 'pointer', fontSize: 12, fontWeight: activeTab === tab ? 600 : 400, textTransform: 'capitalize', transition: 'all 0.15s' }}>
                 {tab === 'objects'
                   ? `Objects (${viewMode === '3d' ? cuboids.length : shapes.length})`
-                  : `Labels (${labels.length})`}
+                  : tab === 'labels'
+                  ? `Labels (${labels.length})`
+                  : 'Audit'}
               </button>
             ))}
           </div>
@@ -1095,6 +1584,12 @@ export default function AnnotationEditor() {
                 style={{ width: 26, height: 26, border: '1px solid #d9d9d9', borderRadius: 4, background: allHidden ? '#f5f5f5' : '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: allHidden ? '#bfbfbf' : '#8c8c8c', fontSize: 13 }}>
                 {allHidden ? '🙈' : '👁'}
               </button>
+              {shapes.length > 0 && frameNum < files.length - 1 && (
+                <button title="Copy all shapes to next frame" onClick={handleCopyToNextFrame}
+                  style={{ width: 26, height: 26, border: '1px solid #d9d9d9', borderRadius: 4, background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1890ff', fontSize: 12 }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 18h6M12 12v6"/><path d="M5 12V7a2 2 0 012-2h10a2 2 0 012 2v5"/></svg>
+                </button>
+              )}
             </div>
           )}
 
@@ -1178,6 +1673,12 @@ export default function AnnotationEditor() {
                     <span style={{ flex: 1, fontSize: 12, color: selectedShapeId === shape.id ? '#1890ff' : '#262626', fontWeight: selectedShapeId === shape.id ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {shape.type} #{i + 1} &mdash; {shape.label}
                     </span>
+                    {shape.confidence !== undefined && (
+                      <span title={`AI confidence: ${Math.round(shape.confidence * 100)}%`}
+                        style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: shape.confidence >= 0.7 ? '#f6ffed' : shape.confidence >= 0.4 ? '#fffbe6' : '#fff1f0', color: shape.confidence >= 0.7 ? '#389e0d' : shape.confidence >= 0.4 ? '#875500' : '#cf1322', border: `1px solid ${shape.confidence >= 0.7 ? '#b7eb8f' : shape.confidence >= 0.4 ? '#ffe58f' : '#ffa39e'}`, flexShrink: 0 }}>
+                        {Math.round(shape.confidence * 100)}%
+                      </span>
+                    )}
                     {shape.locked && <span style={{ fontSize: 10, color: '#fa8c16' }}>🔒</span>}
                     <div style={{ display: 'flex', gap: 1 }}>
                       <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '1px 3px', color: shape.hidden ? '#bfbfbf' : '#8c8c8c', fontSize: 12 }}
@@ -1196,24 +1697,138 @@ export default function AnnotationEditor() {
               })
             )}
 
+            {activeTab === 'audit' && (() => {
+              const ACTION_META: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+                created:            { color: '#52c41a', label: 'Created',             icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg> },
+                updated:            { color: '#1890ff', label: 'Updated',             icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4z"/></svg> },
+                deleted:            { color: '#ff4d4f', label: 'Deleted',             icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg> },
+                stage_changed:      { color: '#722ed1', label: 'Stage changed',       icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg> },
+                state_changed:      { color: '#fa8c16', label: 'State changed',       icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg> },
+                assigned:           { color: '#13c2c2', label: 'Assigned',            icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> },
+                annotation_saved:   { color: '#1890ff', label: 'Annotations saved',  icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> },
+                annotations_cleared:{ color: '#ff4d4f', label: 'Annotations cleared', icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg> },
+              };
+
+              const fmt = (iso: string) => {
+                const d = new Date(iso);
+                const now = new Date();
+                const diffMs = now.getTime() - d.getTime();
+                const diffMin = Math.floor(diffMs / 60000);
+                if (diffMin < 1) return 'just now';
+                if (diffMin < 60) return `${diffMin}m ago`;
+                const diffH = Math.floor(diffMin / 60);
+                if (diffH < 24) return `${diffH}h ago`;
+                return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+              };
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 4px 8px', flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                      {auditTotal} event{auditTotal !== 1 ? 's' : ''}
+                    </span>
+                    <button onClick={() => { setAuditEntries([]); setAuditOffset(0); fetchAudit(0, false); }}
+                      style={{ fontSize: 11, color: '#1890ff', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}>
+                      Refresh
+                    </button>
+                  </div>
+
+                  {auditLoading && auditEntries.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '32px 0', color: '#8c8c8c', fontSize: 13 }}>Loading…</div>
+                  )}
+
+                  {!auditLoading && auditEntries.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '32px 16px', color: '#8c8c8c', fontSize: 13 }}>
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ display: 'block', margin: '0 auto 8px', opacity: 0.35 }}><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                      No events recorded yet
+                    </div>
+                  )}
+
+                  {auditEntries.map((entry, idx) => {
+                    const meta = ACTION_META[entry.action] || { color: '#8c8c8c', label: entry.action, icon: null };
+                    const isLast = idx === auditEntries.length - 1;
+                    return (
+                      <div key={entry.id} style={{ display: 'flex', gap: 10, paddingBottom: isLast ? 4 : 12, position: 'relative' }}>
+                        {/* Timeline line */}
+                        {!isLast && (
+                          <div style={{ position: 'absolute', left: 13, top: 26, bottom: 0, width: 1, background: '#f0f0f0' }} />
+                        )}
+                        {/* Icon dot */}
+                        <div style={{ width: 26, height: 26, borderRadius: '50%', background: `${meta.color}18`, border: `1.5px solid ${meta.color}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: meta.color, zIndex: 1 }}>
+                          {meta.icon}
+                        </div>
+                        {/* Content */}
+                        <div style={{ flex: 1, minWidth: 0, paddingTop: 3 }}>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{meta.label}</span>
+                            {entry.user && (
+                              <span style={{ fontSize: 11, color: '#8c8c8c' }}>by <b style={{ color: '#595959' }}>{entry.user.username}</b></span>
+                            )}
+                            <span style={{ fontSize: 10, color: '#bfbfbf', marginLeft: 'auto', whiteSpace: 'nowrap' }}
+                              title={new Date(entry.createdAt).toLocaleString()}>
+                              {fmt(entry.createdAt)}
+                            </span>
+                          </div>
+                          {entry.note && (
+                            <div style={{ fontSize: 11, color: '#595959', marginTop: 2, lineHeight: 1.4 }}>{entry.note}</div>
+                          )}
+                          {entry.changes && Object.keys(entry.changes).length > 0 && (
+                            <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              {Object.entries(entry.changes).map(([field, { from, to }]) => (
+                                <div key={field} style={{ fontSize: 10, background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 4, padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                                  <span style={{ color: '#8c8c8c', fontFamily: 'monospace' }}>{field}</span>
+                                  <span style={{ color: '#ff4d4f', background: '#fff1f0', borderRadius: 3, padding: '0 4px', textDecoration: 'line-through', fontFamily: 'monospace' }}>{String(from ?? '—')}</span>
+                                  <span style={{ color: '#8c8c8c' }}>→</span>
+                                  <span style={{ color: '#389e0d', background: '#f6ffed', borderRadius: 3, padding: '0 4px', fontFamily: 'monospace' }}>{String(to ?? '—')}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {auditEntries.length < auditTotal && (
+                    <button onClick={() => fetchAudit(auditOffset, true)} disabled={auditLoading}
+                      style={{ width: '100%', marginTop: 4, padding: '7px 0', background: 'none', border: '1px dashed #d9d9d9', borderRadius: 6, cursor: auditLoading ? 'default' : 'pointer', fontSize: 12, color: auditLoading ? '#bfbfbf' : '#1890ff' }}>
+                      {auditLoading ? 'Loading…' : `Load more (${auditTotal - auditEntries.length} remaining)`}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
             {activeTab === 'labels' && (
               <div>
-                {labels.map((lbl) => (
-                  <div key={lbl.name}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, marginBottom: 2, cursor: 'pointer', background: selectedLabel === lbl.name ? '#e6f4ff' : 'transparent', border: `1px solid ${selectedLabel === lbl.name ? '#91caff' : 'transparent'}`, transition: 'all 0.1s' }}
-                    onClick={() => {
-                      if (selectedShapeId) {
-                        updateShape(selectedShapeId, { label: lbl.name, color: lbl.color });
-                      }
-                      setLabel(lbl.name, lbl.color);
-                    }}>
-                    <div style={{ width: 12, height: 12, borderRadius: 3, background: lbl.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: 13, fontWeight: selectedLabel === lbl.name ? 600 : 400, color: selectedLabel === lbl.name ? '#1890ff' : '#262626' }}>{lbl.name}</span>
-                    {selectedShapeId && selectedShapeId && shapes.find(s => s.id === selectedShapeId)?.label === lbl.name
-                      ? <span style={{ fontSize: 10, color: '#722ed1' }}>selected</span>
-                      : selectedLabel === lbl.name && !selectedShapeId && <span style={{ fontSize: 10, color: '#1890ff' }}>active</span>}
+                {labels.length > 4 && (
+                  <div style={{ marginBottom: 6 }}>
+                    <input
+                      type="text" placeholder="Search labels…" value={labelSearch}
+                      onChange={e => setLabelSearch(e.target.value)}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', border: '1px solid #d9d9d9', borderRadius: 5, fontSize: 12, outline: 'none' }} />
                   </div>
-                ))}
+                )}
+                {labels.filter(l => !labelSearch || l.name.toLowerCase().includes(labelSearch.toLowerCase())).map((lbl) => {
+                  const realIdx = labels.indexOf(lbl);
+                  return (
+                    <div key={lbl.name}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, marginBottom: 2, cursor: 'pointer', background: selectedLabel === lbl.name ? '#e6f4ff' : 'transparent', border: `1px solid ${selectedLabel === lbl.name ? '#91caff' : 'transparent'}`, transition: 'all 0.1s' }}
+                      onClick={() => {
+                        if (selectedShapeId) updateShape(selectedShapeId, { label: lbl.name, color: lbl.color });
+                        setLabel(lbl.name, lbl.color);
+                      }}>
+                      <div style={{ width: 12, height: 12, borderRadius: 3, background: lbl.color, flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: selectedLabel === lbl.name ? 600 : 400, color: selectedLabel === lbl.name ? '#1890ff' : '#262626' }}>{lbl.name}</span>
+                      {realIdx < 9 && (
+                        <kbd style={{ fontSize: 9, background: '#e8e8e8', borderRadius: 3, padding: '1px 4px', color: '#595959', flexShrink: 0 }} title="Press this key to assign label">{realIdx + 1}</kbd>
+                      )}
+                      {selectedShapeId && shapes.find(s => s.id === selectedShapeId)?.label === lbl.name
+                        ? <span style={{ fontSize: 10, color: '#722ed1' }}>selected</span>
+                        : selectedLabel === lbl.name && !selectedShapeId && <span style={{ fontSize: 10, color: '#1890ff' }}>active</span>}
+                    </div>
+                  );
+                })}
                 {showAddLabel ? (
                   <div style={{ padding: '8px 4px', display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <input autoFocus type="text" value={newLabelName}
@@ -1238,7 +1853,7 @@ export default function AnnotationEditor() {
           </div>
 
           {/* APPEARANCE SECTION */}
-          <div style={{ borderTop: '1px solid #e8e8e8', flexShrink: 0 }}>
+          {activeTab !== 'audit' && <div style={{ borderTop: '1px solid #e8e8e8', flexShrink: 0 }}>
             <button onClick={() => setAppearanceOpen(o => !o)}
               style={{ width: '100%', padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#595959', textTransform: 'uppercase', letterSpacing: '0.5px', justifyContent: 'space-between' }}>
               <span>Appearance</span>
@@ -1287,21 +1902,29 @@ export default function AnnotationEditor() {
                 </label>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* KEYBOARD SHORTCUTS */}
-          <div style={{ borderTop: '1px solid #e8e8e8', padding: '10px 14px', flexShrink: 0, background: '#fafafa' }}>
-            <div style={{ fontSize: 10, color: '#8c8c8c', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600, marginBottom: 6 }}>Shortcuts</div>
+          {activeTab !== 'audit' && <div style={{ borderTop: '1px solid #e8e8e8', padding: '10px 14px', flexShrink: 0, background: '#fafafa' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: '#8c8c8c', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Shortcuts</div>
+              <button onClick={() => setShowHelp(true)} title="Show all shortcuts (?)"
+                style={{ fontSize: 10, color: '#1890ff', background: 'none', border: '1px solid #91caff', borderRadius: 3, padding: '1px 6px', cursor: 'pointer' }}>? all</button>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 8px', fontSize: 11, color: '#595959' }}>
               {Object.entries(TOOL_KEYS).map(([tool, key]) => (
                 <div key={tool}><kbd style={{ background: currentTool === tool ? '#1890ff' : '#e8e8e8', color: currentTool === tool ? '#fff' : '#262626', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>{key}</kbd> {tool}</div>
               ))}
+              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Ctrl+C</kbd> copy</div>
+              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Ctrl+V</kbd> paste</div>
+              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Tab</kbd> cycle</div>
+              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>1-9</kbd> label</div>
               <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Del</kbd> delete</div>
-              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Esc</kbd> cancel</div>
-              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>left/right</kbd> frames</div>
               <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>F</kbd> fit view</div>
+              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>←/→</kbd> frames</div>
+              <div><kbd style={{ background: '#e8e8e8', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Ctrl+Z</kbd> undo</div>
             </div>
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -1367,7 +1990,7 @@ export default function AnnotationEditor() {
                   } catch (err: any) {
                     setExtractProgress('');
                     setExtracting(false);
-                    alert(err?.response?.data?.error || err?.message || 'Extraction failed');
+                    toast.error('Extraction failed', err?.response?.data?.error || err?.message || 'Unknown error');
                   }
                 }}
                 style={{ padding: '7px 18px', borderRadius: 6, border: 'none', background: extracting ? '#91caff' : '#1890ff', color: '#fff', cursor: extracting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600 }}>
@@ -1375,6 +1998,55 @@ export default function AnnotationEditor() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* KEYBOARD HELP MODAL */}
+      {showHelp && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setShowHelp(false)}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 560, maxHeight: '80vh', overflow: 'auto', boxShadow: '0 12px 48px rgba(0,0,0,0.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <span style={{ fontWeight: 700, fontSize: 16 }}>Keyboard Shortcuts</span>
+              <button onClick={() => setShowHelp(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#8c8c8c' }}>×</button>
+            </div>
+            {([
+              { group: 'Drawing Tools', items: [['S', 'Select tool'], ['R', 'Rectangle'], ['P', 'Polygon'], ['L', 'Polyline'], ['D', 'Point'], ['E', 'Ellipse']] },
+              { group: 'Navigation', items: [['←/→', 'Previous/Next frame'], ['Home/End', 'First/Last frame'], ['F', 'Fit image to view'], ['Ctrl+S', 'Save annotations']] },
+              { group: 'Shape Operations', items: [['Ctrl+Z', 'Undo'], ['Ctrl+Y', 'Redo'], ['Ctrl+C', 'Copy selected shape'], ['Ctrl+V', 'Paste shape (+12px offset)'], ['Tab', 'Cycle to next shape'], ['Shift+Tab', 'Cycle to previous shape'], ['Del', 'Delete selected shape'], ['Esc', 'Cancel / deselect']] },
+              { group: 'Label Assignment', items: [['1-9', 'Assign label 1–9 to selected shape'], ['Click label', 'Assign label to selected shape']] },
+              { group: 'Canvas', items: [['Scroll wheel', 'Zoom in/out'], ['Middle-click drag', 'Pan canvas'], ['Ctrl+drag', 'Pan canvas'], ['Double-click', 'Finish polygon']] },
+              { group: 'View', items: [['?', 'Toggle this help'], ['Esc', 'Close menus/help']] },
+            ] as { group: string; items: [string, string][] }[]).map(({ group, items }) => (
+              <div key={group} style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#8c8c8c', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>{group}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px 16px' }}>
+                  {items.map(([key, desc]) => (
+                    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                      <kbd style={{ background: '#f5f5f5', border: '1px solid #d9d9d9', borderRadius: 4, padding: '2px 6px', fontSize: 11, fontFamily: 'monospace', whiteSpace: 'nowrap', flexShrink: 0 }}>{key}</kbd>
+                      <span style={{ color: '#595959' }}>{desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* BATCH AI PROGRESS OVERLAY */}
+      {batchAiLoading && (
+        <div style={{ position: 'fixed', bottom: 40, left: '50%', transform: 'translateX(-50%)', background: '#fff', border: '1px solid #e8e8e8', borderRadius: 10, padding: '12px 20px', boxShadow: '0 4px 20px rgba(0,0,0,0.15)', zIndex: 1500, minWidth: 280 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}><circle cx="12" cy="12" r="10" strokeDasharray="31.4" strokeDashoffset="10"/></svg>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#262626' }}>Batch AI Annotation</span>
+            <span style={{ fontSize: 12, color: '#8c8c8c', marginLeft: 'auto' }}>{batchAiProgress.done}/{batchAiProgress.total}</span>
+          </div>
+          <div style={{ height: 6, background: '#e8e8e8', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ height: '100%', background: '#16a34a', borderRadius: 3, transition: 'width 0.3s', width: `${(batchAiProgress.done / Math.max(batchAiProgress.total, 1)) * 100}%` }} />
+          </div>
+          <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>Frame {batchAiProgress.done} of {batchAiProgress.total}…</div>
         </div>
       )}
 
@@ -1397,6 +2069,8 @@ export default function AnnotationEditor() {
         {isPlaying && <span style={{ fontSize: 11, color: '#52c41a' }}>Playing</span>}
         {saving && <span style={{ fontSize: 11, color: '#fa8c16' }}>Saving...</span>}
         {saved && <span style={{ fontSize: 11, color: '#52c41a' }}>Saved</span>}
+        {clipboardShape && <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>📋 {clipboardShape.type} in clipboard (Ctrl+V)</span>}
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'rgba(255,255,255,0.3)', cursor: 'pointer' }} onClick={() => setShowHelp(true)}>? shortcuts</span>
       </div>
     </div>
   );

@@ -38,10 +38,30 @@ export class Job {
   @Column()
   taskId: string;
 
+  // Annotator
   @ManyToOne(() => User, { nullable: true, eager: false })
   @JoinColumn({ name: "assigneeId" })
   assignee: User;
 
   @Column({ nullable: true })
   assigneeId: string;
+
+  // Validator (who approved at validation stage)
+  @ManyToOne(() => User, { nullable: true, eager: false })
+  @JoinColumn({ name: "validatedById" })
+  validatedBy: User;
+
+  @Column({ nullable: true })
+  validatedById: string;
+
+  // Acceptor (who approved at acceptance stage)
+  @ManyToOne(() => User, { nullable: true, eager: false })
+  @JoinColumn({ name: "acceptedById" })
+  acceptedBy: User;
+
+  @Column({ nullable: true })
+  acceptedById: string;
+
+  @Column({ nullable: true, type: 'text' })
+  reviewNote: string;
 }

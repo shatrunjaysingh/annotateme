@@ -11,6 +11,8 @@ import { Analytics } from "../entities/Analytics";
 import { Task } from "../entities/Task";
 import { Job } from "../entities/Job";
 import { Label } from "../entities/Label";
+import { TaskAudit } from "../entities/TaskAudit";
+import { JobAudit } from "../entities/JobAudit";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
@@ -21,7 +23,7 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_NAME || "annotateme",
   synchronize: true,
   logging: process.env.NODE_ENV === "development",
-  entities: [User, Organization, Project, Annotation, AnnotationLabel, File, Collaboration, Analytics, Task, Job, Label],
+  entities: [User, Organization, Project, Annotation, AnnotationLabel, File, Collaboration, Analytics, Task, Job, Label, TaskAudit, JobAudit],
   migrations: [],
   subscribers: [],
   extra: {
