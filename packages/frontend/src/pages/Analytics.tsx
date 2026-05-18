@@ -13,6 +13,8 @@ interface ClassRow { label: string; count: number; }
 interface LeaderRow { id: string; username: string; frames: number; shapes: number; }
 interface VelocityRow { date: string; saves: number; }
 interface ProjectSummary { tasks: number; jobs: JobStats; }
+interface QualityRow { user_id: string; username: string; frames_annotated: number; total_shapes: number; avg_confidence: number; coverage_pct: number | null; }
+interface QualityData { gt_shape_count: number; gt_frame_count: number; annotators: QualityRow[]; }
 
 const jobColors: Record<string, string> = { new: '#8c8c8c', in_progress: '#1890ff', completed: '#52c41a', rejected: '#ff4d4f' };
 
@@ -89,6 +91,7 @@ export default function Analytics() {
   const [leaderboard, setLeaderboard] = useState<LeaderRow[]>([]);
   const [velocity, setVelocity] = useState<VelocityRow[]>([]);
   const [projectSummary, setProjectSummary] = useState<ProjectSummary | null>(null);
+  const [qualityData, setQualityData] = useState<QualityData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
@@ -138,16 +141,18 @@ export default function Analytics() {
     if (!pid) return;
     setDetailLoading(true);
     try {
-      const [cdRes, lbRes, velRes, sumRes] = await Promise.all([
+      const [cdRes, lbRes, velRes, sumRes, qualRes] = await Promise.all([
         client.get(`/analytics/class-distribution/${pid}`),
         client.get(`/analytics/leaderboard/${pid}`),
         client.get(`/analytics/velocity/${pid}`),
         client.get(`/analytics/summary/${pid}`),
+        client.get(`/analytics/quality/${pid}`),
       ]);
       setClassDist(cdRes.data);
       setLeaderboard(lbRes.data);
       setVelocity(velRes.data);
       setProjectSummary(sumRes.data);
+      setQualityData(qualRes.data);
     } catch { /* no-op */ }
     finally { setDetailLoading(false); }
   }, []);
@@ -323,6 +328,68 @@ export default function Analytics() {
                     )}
                   </div>
 
+                </div>
+              )}
+
+              {/* Quality report */}
+              {selectedProject && qualityData && !detailLoading && qualityData.annotators.length > 0 && (
+                <div className="card" style={{ padding: 20 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 4, marginTop: 0 }}>
+                    Annotator Quality Report
+                    <span style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 400, marginLeft: 6 }}>vs. ground truth</span>
+                  </h3>
+                  {qualityData.gt_frame_count === 0 && (
+                    <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 12, padding: '6px 10px', background: '#fffbe6', borderRadius: 6, border: '1px solid #ffe58f' }}>
+                      No ground truth jobs in this project yet — create a job with type "Ground truth" to enable quality scoring.
+                    </div>
+                  )}
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid #f0f0f0' }}>
+                          {['Annotator', 'Frames', 'Shapes', 'Coverage vs GT', 'Avg Confidence'].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontSize: 11, fontWeight: 600, color: '#8c8c8c', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {qualityData.annotators.map((r, i) => (
+                          <tr key={r.user_id} style={{ borderBottom: '1px solid #f5f5f5', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                            <td style={{ padding: '8px 10px', fontWeight: 500 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#1890ff', flexShrink: 0 }}>
+                                  {r.username.charAt(0).toUpperCase()}
+                                </div>
+                                {r.username}
+                              </div>
+                            </td>
+                            <td style={{ padding: '8px 10px', color: '#595959' }}>{r.frames_annotated}</td>
+                            <td style={{ padding: '8px 10px', color: '#595959' }}>{r.total_shapes.toLocaleString()}</td>
+                            <td style={{ padding: '8px 10px' }}>
+                              {r.coverage_pct !== null ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <div style={{ flex: 1, height: 6, background: '#f0f0f0', borderRadius: 3, overflow: 'hidden', minWidth: 80 }}>
+                                    <div style={{ height: '100%', width: `${r.coverage_pct}%`, background: r.coverage_pct >= 80 ? '#52c41a' : r.coverage_pct >= 50 ? '#fa8c16' : '#ff4d4f', borderRadius: 3 }} />
+                                  </div>
+                                  <span style={{ fontWeight: 600, fontSize: 12, color: r.coverage_pct >= 80 ? '#389e0d' : r.coverage_pct >= 50 ? '#d46b08' : '#cf1322', flexShrink: 0 }}>{r.coverage_pct}%</span>
+                                </div>
+                              ) : <span style={{ color: '#bfbfbf', fontSize: 11 }}>No GT</span>}
+                            </td>
+                            <td style={{ padding: '8px 10px' }}>
+                              {r.avg_confidence > 0 ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <div style={{ flex: 1, height: 6, background: '#f0f0f0', borderRadius: 3, overflow: 'hidden', minWidth: 60 }}>
+                                    <div style={{ height: '100%', width: `${r.avg_confidence}%`, background: '#722ed1', borderRadius: 3 }} />
+                                  </div>
+                                  <span style={{ fontWeight: 600, fontSize: 12, color: '#722ed1', flexShrink: 0 }}>{r.avg_confidence}%</span>
+                                </div>
+                              ) : <span style={{ color: '#bfbfbf', fontSize: 11 }}>Manual</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
 

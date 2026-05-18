@@ -101,7 +101,25 @@
       "Bash(ffmpeg -y -f lavfi -i ' *)",
       "Bash(python3 *)",
       "Bash(ffmpeg -y -framerate 25 -i /tmp/street_frames/frame_%04d.ppm -vf 'drawtext=fontfile=/System/Library/Fonts/Helvetica.ttc:text='\\\\''STREET SCENE DASHCAM'\\\\'':fontcolor=white:fontsize=20:x=10:y=8, *)",
-      "Bash(pkill -f \"vite\")"
+      "Bash(pkill -f \"vite\")",
+      "Bash(pkill -f \"node.*frontend\")",
+      "Bash(docker exec annotateme_db *)",
+      "Bash(npx playwright *)",
+      "Bash(pip install *)",
+      "Bash(python -c \"from model import active_model; from PIL import Image; img = Image.new\\('RGB', \\(640, 480\\)\\); preds = active_model.predict\\(img\\); print\\(f'Mock model returned {len\\(preds\\)} predictions'\\); print\\(preds[0]\\)\")",
+      "Bash(node_modules/.bin/playwright test *)",
+      "Bash(pkill -f \"uvicorn main:app\")",
+      "Bash(pkill -f \"uvicorn\")",
+      "Bash(pkill -f \"ts-node\\\\|nodemon\\\\|node.*backend\")",
+      "Bash(pkill -f \"python.*main.py\")",
+      "Bash(pip3 show *)",
+      "Bash(pip show *)",
+      "Bash(/usr/local/bin/python3.10 main.py)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(/usr/local/bin/python3.10 *)",
+      "Bash(pkill -f \"ts-node.*index\\\\|nodemon\")",
+      "Bash(sort -k5 -rh)",
+      "Bash(pkill -f \"ts-node src/index\\\\|nodemon.*index\")"
     ]
   }
 }

@@ -25,6 +25,7 @@ interface Job {
   id: string;
   stage: string;
   state: string;
+  type?: string;
   frameStart: number;
   frameEnd: number;
   assignee?: { id: string; username: string };
@@ -1213,6 +1214,9 @@ function TaskCard({ task, taskIndex, users, expandedTaskId, setExpandedTaskId, t
                     Job #{idx + 1}
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                   </button>
+                  {job.type === 'ground_truth' && (
+                    <span style={{ fontSize: 9, fontWeight: 700, background: '#fff7e6', color: '#d48806', border: '1px solid #ffd666', borderRadius: 4, padding: '1px 5px', letterSpacing: '0.3px' }}>GT</span>
+                  )}
                 </div>
                 <div style={{ flex: 1, fontSize: 11, color: '#8c8c8c', lineHeight: 1.7 }}>
                   <div>Created: {new Date(job.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>

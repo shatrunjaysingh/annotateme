@@ -21,6 +21,7 @@ import tenantRoutes from "./routes/tenants";
 import aiRoutes from "./routes/ai";
 import auditRoutes from "./routes/audits";
 import webhookRoutes from "./routes/webhooks";
+import shapeIssuesRouter from "./routes/shapeIssues";
 
 const app: Express = express();
 const httpServer = createServer(app);
@@ -80,6 +81,7 @@ app.use("/api/tenants", tenantRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/audits", auditRoutes);
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/shape-issues", shapeIssuesRouter);
 
 // Health check
 app.get("/health", (_req, res) => res.json({ status: "ok", timestamp: new Date().toISOString() }));

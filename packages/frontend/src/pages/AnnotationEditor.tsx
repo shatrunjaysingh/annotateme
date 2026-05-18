@@ -13,6 +13,7 @@ interface JobInfo {
   id: string;
   stage: string;
   state: string;
+  type?: string;
   frameStart: number;
   frameEnd: number;
   reviewNote?: string;
@@ -203,6 +204,10 @@ export default function AnnotationEditor() {
   const dataType = (job?.task?.project as any)?.dataType?.toLowerCase() || '';
   const isTextMode = dataType === 'text' || dataType === 'csv';
 
+  // Frame-level tags
+  const [frameTags, setFrameTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+
   // Object tracking
   interface TrackKeyframe { points: { x: number; y: number }[]; occluded?: boolean; attributes?: Record<string, unknown>; }
   interface Track { id: string; label: string; color: string; keyframes: Record<string, TrackKeyframe>; }
@@ -211,6 +216,14 @@ export default function AnnotationEditor() {
 
   // QA (automated quality checks)
   const [qaOpen, setQaOpen] = useState(false);
+
+  // Shape issues
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  type ShapeIssueItem = { id: string; shapeId: string | null; comment: string; status: string; authorId: string; author?: { username: string }; createdAt: string; };
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [issues, setIssues] = useState<ShapeIssueItem[]>([]);
+  const [issueInput, setIssueInput] = useState('');
+  const [issuePending, setIssuePending] = useState(false);
 
   // Active learning — per-frame min confidence from AI shapes
   const [frameConfidence, setFrameConfidence] = useState<Record<number, number>>({});
@@ -331,6 +344,7 @@ export default function AnnotationEditor() {
         const savedTrackIds = new Set((data.shapes || []).map((s: any) => s.trackId).filter(Boolean));
         const filteredTrackShapes = trackShapes.filter(ts => !savedTrackIds.has(ts.trackId));
         setShapes([...(data.shapes || []), ...filteredTrackShapes]);
+        setFrameTags(data.tags || []);
         setCuboids(data.cuboids || []);
         if (data.textSpans) setTextSpans(data.textSpans);
       } catch (err: any) {
@@ -405,7 +419,7 @@ export default function AnnotationEditor() {
         client.put(`/jobs/${jobId}/tracks`, { tracks: updatedTracks }).catch(() => {});
       }
 
-      await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes: regularShapes, cuboids, tags: [], tracks: [], timeSpentMs });
+      await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes: regularShapes, cuboids, tags: frameTags, tracks: [], timeSpentMs });
       // Auto-reopen: annotation stage job that was marked completed gets reset to in_progress
       if (job?.stage === 'annotation' && job?.state === 'completed') {
         setJob(j => j ? { ...j, state: 'in_progress' } : j);
@@ -414,7 +428,7 @@ export default function AnnotationEditor() {
       if (!silent) { setSaved(true); setTimeout(() => setSaved(false), 2000); }
     } catch { /* no-op */ }
     finally { if (!silent) setSaving(false); }
-  }, [jobId, frameNum, shapes, cuboids, isEditable, job?.stage, job?.state, setJob, tracks]);
+  }, [jobId, frameNum, shapes, cuboids, frameTags, isEditable, job?.stage, job?.state, setJob, tracks]);
 
   useEffect(() => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
@@ -480,7 +494,7 @@ export default function AnnotationEditor() {
         });
         client.put(`/jobs/${jobId}/tracks`, { tracks: updatedTracks }).catch(() => {});
       }
-      try { await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes: regularShapes, cuboids, tags: [], tracks: [] }); } catch { /* no-op */ }
+      try { await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes: regularShapes, cuboids, tags: frameTags, tracks: [] }); } catch { /* no-op */ }
     }
     setFrameNum(clamped);
   }, [jobId, frameNum, shapes, cuboids, files.length, job?.frameStart, job?.frameEnd, isEditable]);
@@ -585,6 +599,14 @@ export default function AnnotationEditor() {
       setTracksLoaded(true);
     }).catch(() => setTracksLoaded(true));
   }, [jobId, tracksLoaded]);
+
+  // Load shape issues for the current frame
+  useEffect(() => {
+    if (!jobId) return;
+    client.get(`/shape-issues?jobId=${jobId}&frameNumber=${frameNum}`)
+      .then(({ data }) => setIssues(Array.isArray(data) ? data : []))
+      .catch(() => setIssues([]));
+  }, [jobId, frameNum]);
 
   // Reset per-frame timer whenever we navigate to a new frame
   useEffect(() => { frameStartTime.current = Date.now(); }, [frameNum]);
@@ -1395,6 +1417,13 @@ export default function AnnotationEditor() {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               QA {qaIssues.length > 0 ? `(${qaIssues.length})` : '✓'}
             </button>
+            {/* Review Issues button */}
+            <button onClick={() => setIssuesOpen(o => !o)}
+              title="Review Issues"
+              style={{ padding: '5px 10px', borderRadius: 5, border: `1px solid ${issuesOpen ? '#fa8c16' : '#d9d9d9'}`, background: issuesOpen ? '#fff7e6' : '#fff', color: issuesOpen ? '#fa8c16' : '#595959', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Issues {issues.filter(i => i.status === 'open').length > 0 && <span style={{ background: '#fa8c16', color: '#fff', borderRadius: 10, padding: '0 5px', fontSize: 10 }}>{issues.filter(i => i.status === 'open').length}</span>}
+            </button>
             {/* Active learning: jump to most uncertain frame */}
             {sortByUncertainty && (
               <button onClick={() => { const next = uncertainFrameOrder.find(f => f !== frameNum); if (next !== undefined) goToFrame(next); }}
@@ -1494,6 +1523,14 @@ export default function AnnotationEditor() {
           </div>
         );
       })()}
+
+      {/* GROUND TRUTH BANNER */}
+      {job && job.type === 'ground_truth' && (
+        <div style={{ background: '#fffbe6', borderBottom: '2px solid #ffd666', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, background: '#ffd666', color: '#614700', borderRadius: 4, padding: '1px 7px', letterSpacing: '0.5px' }}>GROUND TRUTH</span>
+          <span style={{ fontSize: 13, color: '#614700' }}>Annotations in this job serve as the reference for quality scoring. Annotate with maximum precision.</span>
+        </div>
+      )}
 
       {/* REVIEWER FEEDBACK BANNER — shown to annotator when rejected */}
       {job && job.stage === 'annotation' && job.state === 'rejected' && job.reviewNote && (
@@ -1768,6 +1805,63 @@ export default function AnnotationEditor() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Review Issues panel */}
+          {issuesOpen && (
+            <div style={{ position: 'absolute', bottom: 40, right: 16, width: 300, background: '#fff', border: '1px solid #fa8c16', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', zIndex: 50, display: 'flex', flexDirection: 'column', maxHeight: 360 }}>
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid #e8e8e8', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>Review Issues</span>
+                <button onClick={() => setIssuesOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: '#8c8c8c' }}>×</button>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {issues.length === 0 && <div style={{ fontSize: 12, color: '#8c8c8c', textAlign: 'center', padding: 16 }}>No issues on this frame</div>}
+                {issues.map(issue => (
+                  <div key={issue.id} style={{ background: issue.status === 'resolved' ? '#f6ffed' : '#fff7e6', borderRadius: 6, padding: '8px 10px', border: `1px solid ${issue.status === 'resolved' ? '#b7eb8f' : '#ffd591'}` }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                      <div style={{ flex: 1, fontSize: 12, color: '#262626', lineHeight: 1.5 }}>
+                        {issue.shapeId && <span style={{ fontSize: 10, background: '#e6f4ff', borderRadius: 3, padding: '1px 5px', color: '#1890ff', marginRight: 4 }}>Shape</span>}
+                        {issue.comment}
+                      </div>
+                      {issue.status === 'open' && (
+                        <button onClick={async () => { await client.patch(`/shape-issues/${issue.id}/resolve`, {}); setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, status: 'resolved' } : i)); }}
+                          style={{ padding: '2px 7px', borderRadius: 4, border: '1px solid #b7eb8f', background: '#f6ffed', fontSize: 11, cursor: 'pointer', color: '#389e0d', flexShrink: 0 }}>✓</button>
+                      )}
+                      <button onClick={async () => { await client.delete(`/shape-issues/${issue.id}`); setIssues(prev => prev.filter(i => i.id !== issue.id)); }}
+                        style={{ padding: '2px 7px', borderRadius: 4, border: '1px solid #ffccc7', background: '#fff2f0', fontSize: 11, cursor: 'pointer', color: '#ff4d4f', flexShrink: 0 }}>×</button>
+                    </div>
+                    <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 4 }}>{issue.author?.username || 'Unknown'} · {new Date(issue.createdAt).toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: '8px 10px', borderTop: '1px solid #e8e8e8', display: 'flex', gap: 6 }}>
+                <input value={issueInput} onChange={e => setIssueInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && issueInput.trim() && !issuePending && jobId) {
+                      setIssuePending(true);
+                      client.post('/shape-issues', { jobId, frameNumber: frameNum, shapeId: selectedShapeId || null, comment: issueInput.trim() })
+                        .then(({ data }) => { setIssues(prev => [data, ...prev]); setIssueInput(''); })
+                        .catch(() => {})
+                        .finally(() => setIssuePending(false));
+                    }
+                  }}
+                  placeholder={selectedShapeId ? 'Comment on selected shape…' : 'Frame-level comment…'}
+                  style={{ flex: 1, padding: '5px 8px', border: '1px solid #d9d9d9', borderRadius: 5, fontSize: 12, outline: 'none' }} />
+                <button disabled={!issueInput.trim() || issuePending}
+                  onClick={async () => {
+                    if (!issueInput.trim() || !jobId) return;
+                    setIssuePending(true);
+                    try {
+                      const { data } = await client.post('/shape-issues', { jobId, frameNumber: frameNum, shapeId: selectedShapeId || null, comment: issueInput.trim() });
+                      setIssues(prev => [data, ...prev]);
+                      setIssueInput('');
+                    } catch { /* no-op */ } finally { setIssuePending(false); }
+                  }}
+                  style={{ padding: '5px 10px', borderRadius: 5, border: 'none', background: '#fa8c16', color: '#fff', fontSize: 12, cursor: 'pointer', opacity: issuePending ? 0.6 : 1 }}>
+                  Add
+                </button>
+              </div>
             </div>
           )}
 
@@ -2229,6 +2323,47 @@ export default function AnnotationEditor() {
                     + Add Label
                   </button>
                 )}
+
+                {/* Frame Tags */}
+                <div style={{ marginTop: 16, borderTop: '1px solid #e8e8e8', paddingTop: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#8c8c8c', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>Frame Tags</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                    {frameTags.map(tag => (
+                      <span key={tag} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', background: '#f0f0f0', borderRadius: 12, fontSize: 12, color: '#595959' }}>
+                        {tag}
+                        {isEditable && (
+                          <button onClick={() => setFrameTags(prev => prev.filter(t => t !== tag))}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: '#8c8c8c', fontSize: 11, lineHeight: 1 }}>×</button>
+                        )}
+                      </span>
+                    ))}
+                    {frameTags.length === 0 && <span style={{ fontSize: 11, color: '#bfbfbf', fontStyle: 'italic' }}>No tags on this frame</span>}
+                  </div>
+                  {isEditable && (
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <input
+                        value={tagInput} onChange={e => setTagInput(e.target.value)}
+                        onKeyDown={e => {
+                          if ((e.key === 'Enter' || e.key === ',') && tagInput.trim()) {
+                            e.preventDefault();
+                            const t = tagInput.trim().replace(/,$/, '');
+                            if (t && !frameTags.includes(t)) setFrameTags(prev => [...prev, t]);
+                            setTagInput('');
+                          }
+                        }}
+                        placeholder="Add tag…"
+                        style={{ flex: 1, padding: '4px 8px', border: '1px solid #d9d9d9', borderRadius: 5, fontSize: 12, outline: 'none' }} />
+                      <button
+                        onClick={() => {
+                          const t = tagInput.trim();
+                          if (t && !frameTags.includes(t)) setFrameTags(prev => [...prev, t]);
+                          setTagInput('');
+                        }}
+                        disabled={!tagInput.trim()}
+                        style={{ padding: '4px 8px', border: '1px solid #d9d9d9', borderRadius: 5, fontSize: 12, cursor: 'pointer', background: '#fff' }}>+</button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

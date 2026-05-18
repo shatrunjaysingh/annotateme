@@ -147,4 +147,59 @@ router.get("/summary/:projectId", async (req: AuthRequest, res) => {
   }
 });
 
+// GET /api/analytics/quality/:projectId
+// Per-annotator quality scores: annotation completeness + avg confidence vs ground truth shapes
+router.get("/quality/:projectId", async (req: AuthRequest, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Count GT shapes per frame (ground_truth jobs in this project)
+    const gtRows = await AppDataSource.query(`
+      SELECT
+        a."frameNumber",
+        COALESCE(json_array_length(a.shapes), 0)::int AS gt_shapes
+      FROM annotations a
+      JOIN jobs j ON j.id::text = a."jobId"
+      JOIN tasks t ON t.id = j."taskId"
+      WHERE t."projectId" = $1::uuid
+        AND j.type = 'ground_truth'
+        AND a.shapes IS NOT NULL
+    `, [projectId]);
+
+    const gtTotal = gtRows.reduce((s: number, r: any) => s + r.gt_shapes, 0);
+
+    // Per annotator: frames annotated, shapes annotated, avg confidence from AI shapes
+    const annotatorRows = await AppDataSource.query(`
+      SELECT
+        u.id AS user_id,
+        u.username,
+        COUNT(DISTINCT a.id)::int AS frames_annotated,
+        COALESCE(SUM(json_array_length(a.shapes)), 0)::int AS total_shapes,
+        COALESCE(AVG(a.confidence), 0) AS avg_confidence
+      FROM annotations a
+      JOIN jobs j ON j.id::text = a."jobId"
+      JOIN tasks t ON t.id = j."taskId"
+      JOIN users u ON u.id = j."assigneeId"
+      WHERE t."projectId" = $1::uuid
+        AND j.type = 'annotation'
+        AND a.shapes IS NOT NULL
+      GROUP BY u.id, u.username
+      ORDER BY total_shapes DESC
+    `, [projectId]);
+
+    res.json({
+      gt_shape_count: gtTotal,
+      gt_frame_count: gtRows.length,
+      annotators: annotatorRows.map((r: any) => ({
+        ...r,
+        avg_confidence: Math.round(parseFloat(r.avg_confidence) * 100),
+        coverage_pct: gtTotal > 0 ? Math.min(100, Math.round((r.total_shapes / gtTotal) * 100)) : null,
+      })),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch quality metrics" });
+  }
+});
+
 export default router;

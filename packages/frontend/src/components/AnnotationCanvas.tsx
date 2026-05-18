@@ -196,6 +196,7 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
           ctx.strokeRect(x, y, w, h);
           ctx.setLineDash([]);
         } else {
+          if ((shape as any).isInterpolated) ctx.setLineDash([4 / scale, 3 / scale]);
           ctx.strokeStyle = color; ctx.lineWidth = 1.5 / scale;
           ctx.strokeRect(x, y, w, h);
         }
@@ -229,6 +230,7 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
           ctx.setLineDash([5 / scale, 3 / scale]);
           ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 / scale; ctx.stroke();
         } else {
+          if ((shape as any).isInterpolated) ctx.setLineDash([4 / scale, 3 / scale]);
           ctx.strokeStyle = color; ctx.lineWidth = 1.5 / scale; ctx.stroke();
         }
         ctx.setLineDash([]);
@@ -434,6 +436,19 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
             draw();
             return;
           }
+          // Polygon edge click — insert new vertex at click position along the edge
+          if (selShape.type === 'polygon' && selShape.points.length >= 3) {
+            for (let i = 0; i < selShape.points.length; i++) {
+              const a = selShape.points[i];
+              const b = selShape.points[(i + 1) % selShape.points.length];
+              if (distanceToSegment(imgPt, a, b) < thresh) {
+                const newPts = [...selShape.points.slice(0, i + 1), { ...imgPt }, ...selShape.points.slice(i + 1)];
+                updateShape(selectedShapeId, { points: newPts });
+                draw();
+                return;
+              }
+            }
+          }
         }
       }
 
@@ -564,6 +579,21 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
     draw();
   }, [currentTool, selectedLabel, screenToImg, addShape, getColor, draw]);
 
+  const onContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    if (currentTool !== 'select' || !selectedShapeId) return;
+    const selShape = shapes.find(s => s.id === selectedShapeId);
+    if (!selShape || selShape.type !== 'polygon' || selShape.points.length <= 3) return;
+    const screenPt = getCanvasPos(e);
+    const imgPt = screenToImg(screenPt.x, screenPt.y);
+    const thresh = 10 / transformRef.current.scale;
+    const vi = hitHandle(selShape.points, imgPt, thresh);
+    if (vi >= 0) {
+      updateShape(selectedShapeId, { points: selShape.points.filter((_, i) => i !== vi) });
+      draw();
+    }
+  }, [currentTool, selectedShapeId, shapes, screenToImg, updateShape, draw]);
+
   const onDblClick = useCallback(() => {
     const d = drawingRef.current;
     if (!d.active) return;
@@ -625,7 +655,7 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
         onMouseUp={onMouseUp}
         onDoubleClick={onDblClick}
         onWheel={onWheel}
-        onContextMenu={e => e.preventDefault()}
+        onContextMenu={onContextMenu}
       />
       {!imageUrl && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.3)', pointerEvents: 'none' }}>
