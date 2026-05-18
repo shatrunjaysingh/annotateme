@@ -895,28 +895,39 @@ export default function AnnotationEditor() {
   const handleBatchAutoAnnotate = useCallback(async () => {
     if (!jobId || files.length === 0) return;
     const total = files.length;
-    const ok = await confirm({ title: 'Batch AI Annotate', message: `Run AI on all ${total} frames? Existing AI-generated annotations will be replaced.`, variant: 'warning', confirmLabel: `Annotate ${total} frames` });
+    const ok = await confirm({ title: 'Batch AI Annotate', message: `Run AI on all ${total} frames? Existing annotations will be replaced with AI predictions.`, variant: 'warning', confirmLabel: `Annotate ${total} frames` });
     if (!ok) return;
     setBatchAiLoading(true);
     setBatchAiProgress({ done: 0, total });
     setAiPanelOpen(false);
     let succeeded = 0;
+    let totalShapes = 0;
     for (let i = 0; i < total; i++) {
+      const frameIndex = files[i].frameNumber; // use actual DB frame number, not loop index
       try {
-        await client.post('/ai/annotate', { jobId, frameIndex: i, confidenceThreshold: aiConf, modelName: aiModelName, classes: aiClasses || undefined });
+        const { data } = await client.post('/ai/annotate', {
+          jobId, frameIndex, confidenceThreshold: aiConf,
+          modelName: aiModelName, classes: aiClasses || undefined,
+        });
+        const aiShapes: any[] = data.shapes || [];
+        // Save shapes to this frame — /ai/annotate only returns them, doesn't persist
+        await client.post(`/jobs/${jobId}/frame/${frameIndex}`, {
+          shapes: aiShapes, cuboids: [], tags: [], tracks: [],
+        });
+        totalShapes += aiShapes.length;
         succeeded++;
-      } catch { /* skip failed frames */ }
+      } catch { /* skip failed frames, continue batch */ }
       setBatchAiProgress({ done: i + 1, total });
     }
     setBatchAiLoading(false);
     setBatchAiProgress({ done: 0, total: 0 });
-    // Reload current frame to show new annotations
+    // Reload current frame to show its new annotations
     try {
       const { data } = await client.get(`/jobs/${jobId}/frame/${frameNum}`);
       setShapes(data.shapes || []);
     } catch { /* no-op */ }
-    toast.success('Batch complete', `${succeeded}/${total} frames annotated`);
-  }, [jobId, files.length, aiConf, aiModelName, aiClasses, frameNum, setShapes, confirm, toast]);
+    toast.success('Batch complete', `${succeeded}/${total} frames — ${totalShapes} shapes created`);
+  }, [jobId, files, aiConf, aiModelName, aiClasses, frameNum, setShapes, confirm, toast]);
 
   // Copy all shapes on current frame to the next frame
   const handleCopyToNextFrame = useCallback(async () => {
