@@ -121,6 +121,20 @@ export default function AnnotationEditor() {
   const [textSpans, setTextSpans] = useState<TextSpan[]>([]);
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
+  // Image enhancement
+  const [imgBrightness, setImgBrightness] = useState(100);
+  const [imgContrast, setImgContrast]    = useState(100);
+  const [imgSaturation, setImgSaturation] = useState(100);
+  const [enhanceOpen, setEnhanceOpen]    = useState(false);
+  const imgFilterStyle = (imgBrightness !== 100 || imgContrast !== 100 || imgSaturation !== 100)
+    ? `brightness(${imgBrightness / 100}) contrast(${imgContrast / 100}) saturate(${imgSaturation / 100})`
+    : undefined;
+
+  // Full label objects (with attributes + descriptions)
+  interface LabelAttrDef { id?: number; name: string; input_type: string; mutable: boolean; values: string[]; default_value?: string; }
+  interface FullLabel { id: string; name: string; color?: string; description?: string; type?: string; attributes?: LabelAttrDef[]; }
+  const [fullLabels, setFullLabels] = useState<FullLabel[]>([]);
+
   // Review / validation mode
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [reviewNoteInput, setReviewNoteInput] = useState('');
@@ -209,6 +223,13 @@ export default function AnnotationEditor() {
       setAnnotationSummary({ frameCount: data.frameCount || 0, totalShapes });
     }).catch(() => {});
   }, [jobId, job?.stage]);
+
+  // Load full label objects (with attributes + descriptions) for the current project
+  useEffect(() => {
+    const pid = job?.task?.project?.id;
+    if (!pid) return;
+    client.get(`/labels/${pid}`).then(({ data }) => setFullLabels(data.labels || [])).catch(() => {});
+  }, [job?.task?.project?.id]);
 
   // Load audit entries when the audit tab is opened (or on first open)
   const fetchAudit = useCallback(async (offset = 0, append = false) => {
@@ -1216,6 +1237,16 @@ export default function AnnotationEditor() {
               </span>
             </div>
           )}
+          {/* Image enhancement toggle */}
+          <div style={{ padding: '0 8px', borderLeft: '1px solid #e8e8e8', height: '100%', display: 'flex', alignItems: 'center' }}>
+            <button
+              onClick={() => setEnhanceOpen(o => !o)}
+              title="Image enhancement (brightness, contrast, saturation)"
+              style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #d9d9d9', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, background: enhanceOpen || !!imgFilterStyle ? '#e6f4ff' : '#fff', color: enhanceOpen || !!imgFilterStyle ? '#1890ff' : '#595959', fontWeight: enhanceOpen || !!imgFilterStyle ? 600 : 400, transition: 'all 0.15s' }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+              Enhance
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1484,17 +1515,19 @@ export default function AnnotationEditor() {
               onSelectSpan={setSelectedSpanId}
             />
           ) : (
-            <AnnotationCanvas
-              imageUrl={imageUrl}
-              jobId={jobId || ''}
-              frameNum={frameNum}
-              labels={labels}
-              colorBy={colorBy}
-              hiddenLabels={hiddenLabelsFilter}
-              outlinedBorders={outlinedBorders}
-              fillOpacity={fillOpacity}
-              selectedOpacity={selectedOpacity}
-            />
+            <div style={{ position: 'absolute', inset: 0, filter: imgFilterStyle }}>
+              <AnnotationCanvas
+                imageUrl={imageUrl}
+                jobId={jobId || ''}
+                frameNum={frameNum}
+                labels={labels}
+                colorBy={colorBy}
+                hiddenLabels={hiddenLabelsFilter}
+                outlinedBorders={outlinedBorders}
+                fillOpacity={fillOpacity}
+                selectedOpacity={selectedOpacity}
+              />
+            </div>
           )}
 
           {/* AI toast */}
@@ -1522,6 +1555,37 @@ export default function AnnotationEditor() {
               </div>
             );
           })()}
+
+          {/* Image Enhancement panel */}
+          {enhanceOpen && (
+            <div style={{ position: 'absolute', bottom: 16, left: 16, background: '#fff', border: '1px solid #e8e8e8', borderRadius: 10, boxShadow: '0 4px 20px rgba(0,0,0,0.14)', padding: '14px 16px', minWidth: 240, zIndex: 50 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>Image Enhancement</span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {!!imgFilterStyle && (
+                    <button onClick={() => { setImgBrightness(100); setImgContrast(100); setImgSaturation(100); }}
+                      style={{ fontSize: 11, color: '#ff4d4f', background: 'none', border: 'none', cursor: 'pointer', padding: '1px 6px' }}>Reset</button>
+                  )}
+                  <button onClick={() => setEnhanceOpen(false)}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8c8c8c', fontSize: 16, lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+              {([
+                { label: 'Brightness', value: imgBrightness, set: setImgBrightness, min: 30, max: 220 },
+                { label: 'Contrast',   value: imgContrast,   set: setImgContrast,   min: 30, max: 220 },
+                { label: 'Saturation', value: imgSaturation, set: setImgSaturation, min: 0,  max: 220 },
+              ] as { label: string; value: number; set: (v: number) => void; min: number; max: number }[]).map(({ label, value, set, min, max }) => (
+                <div key={label} style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#595959', marginBottom: 4 }}>
+                    <span>{label}</span>
+                    <span style={{ color: value !== 100 ? '#1890ff' : '#8c8c8c', fontWeight: value !== 100 ? 600 : 400 }}>{value}%</span>
+                  </div>
+                  <input type="range" min={min} max={max} value={value} onChange={e => set(parseInt(e.target.value))}
+                    style={{ width: '100%', accentColor: '#1890ff' }} />
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Info overlay */}
           {infoOpen && job && (
@@ -1594,28 +1658,87 @@ export default function AnnotationEditor() {
           )}
 
           {/* Selected shape card — shows when a 2D shape is selected */}
-          {selectedShape && viewMode === '2d' && (
-            <div style={{ margin: '8px 8px 0', padding: '10px 12px', background: '#e6f4ff', border: '1px solid #91caff', borderRadius: 8, flexShrink: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <div style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0, background: labels.find(l => l.name === selectedShape.label)?.color || '#1890ff' }} />
-                <span style={{ flex: 1, fontWeight: 600, fontSize: 13, color: '#1890ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {selectedShape.type} — {selectedShape.label}
-                </span>
-                <button onClick={() => { deleteShape(selectedShapeId!); }} title="Delete shape"
-                  style={{ border: 'none', background: '#fff1f0', borderRadius: 4, color: '#ff4d4f', cursor: 'pointer', padding: '2px 8px', fontSize: 12, fontWeight: 600 }}>
-                  Delete
-                </button>
-                <button onClick={() => selectShape(null)} title="Deselect"
-                  style={{ border: 'none', background: '#f0f0f0', borderRadius: 4, color: '#595959', cursor: 'pointer', padding: '2px 6px', fontSize: 13 }}>
-                  ✕
-                </button>
+          {selectedShape && viewMode === '2d' && (() => {
+            const fullLbl = fullLabels.find(l => l.name === selectedShape.label);
+            const attrDefs = fullLbl?.attributes?.filter(a => a.name) || [];
+            const currentAttrs: Record<string, unknown> = (selectedShape as any).attributes || {};
+            return (
+              <div style={{ margin: '8px 8px 0', padding: '10px 12px', background: '#e6f4ff', border: '1px solid #91caff', borderRadius: 8, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <div style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0, background: labels.find(l => l.name === selectedShape.label)?.color || '#1890ff' }} />
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, color: '#1890ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {selectedShape.type} — {selectedShape.label}
+                  </span>
+                  <button onClick={() => { deleteShape(selectedShapeId!); }} title="Delete shape"
+                    style={{ border: 'none', background: '#fff1f0', borderRadius: 4, color: '#ff4d4f', cursor: 'pointer', padding: '2px 8px', fontSize: 12, fontWeight: 600 }}>
+                    Delete
+                  </button>
+                  <button onClick={() => selectShape(null)} title="Deselect"
+                    style={{ border: 'none', background: '#f0f0f0', borderRadius: 4, color: '#595959', cursor: 'pointer', padding: '2px 6px', fontSize: 13 }}>
+                    ✕
+                  </button>
+                </div>
+                {/* Quick flags */}
+                <div style={{ display: 'flex', gap: 6, marginBottom: attrDefs.length ? 8 : 4, flexWrap: 'wrap' }}>
+                  {[
+                    { key: 'occluded', label: '🕶 Occluded' },
+                    { key: 'truncated', label: '✂ Truncated' },
+                  ].map(({ key, label }) => (
+                    <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#595959', cursor: 'pointer', userSelect: 'none' }}>
+                      <input type="checkbox"
+                        checked={!!(currentAttrs[key])}
+                        onChange={e => updateShape(selectedShapeId!, { attributes: { ...currentAttrs, [key]: e.target.checked } } as any)}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                {/* Label-defined attributes */}
+                {attrDefs.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6, padding: '8px 0', borderTop: '1px solid #bae0ff' }}>
+                    {attrDefs.map(attr => {
+                      const val = currentAttrs[attr.name] ?? attr.default_value ?? '';
+                      const setValue = (v: unknown) => updateShape(selectedShapeId!, { attributes: { ...currentAttrs, [attr.name]: v } } as any);
+                      if (attr.input_type === 'checkbox') return (
+                        <label key={attr.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#262626', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={val === true || val === 'true'} onChange={e => setValue(e.target.checked)} />
+                          {attr.name}
+                        </label>
+                      );
+                      if (attr.input_type === 'select' || attr.input_type === 'radio') return (
+                        <div key={attr.name}>
+                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 3 }}>{attr.name}</div>
+                          <select value={String(val)} onChange={e => setValue(e.target.value)}
+                            style={{ width: '100%', fontSize: 12, border: '1px solid #91caff', borderRadius: 4, padding: '3px 6px', background: '#fff', cursor: 'pointer' }}>
+                            {!val && <option value="">—</option>}
+                            {attr.values.map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                        </div>
+                      );
+                      if (attr.input_type === 'number') return (
+                        <div key={attr.name}>
+                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 3 }}>{attr.name}</div>
+                          <input type="number" value={String(val)} onChange={e => setValue(e.target.valueAsNumber)}
+                            style={{ width: '100%', fontSize: 12, border: '1px solid #91caff', borderRadius: 4, padding: '3px 6px', boxSizing: 'border-box' }} />
+                        </div>
+                      );
+                      return (
+                        <div key={attr.name}>
+                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 3 }}>{attr.name}</div>
+                          <input type="text" value={String(val)} onChange={e => setValue(e.target.value)}
+                            style={{ width: '100%', fontSize: 12, border: '1px solid #91caff', borderRadius: 4, padding: '3px 6px', boxSizing: 'border-box' }} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: '#595959', lineHeight: 1.5 }}>
+                  Drag shape body to <b>move</b> · Drag corner handles to <b>resize</b><br/>
+                  Click a label below to <b>reassign</b>
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: '#595959', lineHeight: 1.5 }}>
-                Drag shape body to <b>move</b> · Drag corner handles to <b>resize</b><br/>
-                Click a label below to <b>reassign</b>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Hint when select tool active but nothing drawn yet */}
           {currentTool === 'select' && shapes.length === 0 && viewMode === '2d' && (
@@ -1811,21 +1934,33 @@ export default function AnnotationEditor() {
                 )}
                 {labels.filter(l => !labelSearch || l.name.toLowerCase().includes(labelSearch.toLowerCase())).map((lbl) => {
                   const realIdx = labels.indexOf(lbl);
+                  const fullLbl = fullLabels.find(fl => fl.name === lbl.name);
+                  const description = fullLbl?.description;
                   return (
                     <div key={lbl.name}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, marginBottom: 2, cursor: 'pointer', background: selectedLabel === lbl.name ? '#e6f4ff' : 'transparent', border: `1px solid ${selectedLabel === lbl.name ? '#91caff' : 'transparent'}`, transition: 'all 0.1s' }}
+                      style={{ borderRadius: 6, marginBottom: 2, cursor: 'pointer', background: selectedLabel === lbl.name ? '#e6f4ff' : 'transparent', border: `1px solid ${selectedLabel === lbl.name ? '#91caff' : 'transparent'}`, transition: 'all 0.1s' }}
                       onClick={() => {
                         if (selectedShapeId) updateShape(selectedShapeId, { label: lbl.name, color: lbl.color });
                         setLabel(lbl.name, lbl.color);
                       }}>
-                      <div style={{ width: 12, height: 12, borderRadius: 3, background: lbl.color, flexShrink: 0 }} />
-                      <span style={{ flex: 1, fontSize: 13, fontWeight: selectedLabel === lbl.name ? 600 : 400, color: selectedLabel === lbl.name ? '#1890ff' : '#262626' }}>{lbl.name}</span>
-                      {realIdx < 9 && (
-                        <kbd style={{ fontSize: 9, background: '#e8e8e8', borderRadius: 3, padding: '1px 4px', color: '#595959', flexShrink: 0 }} title="Press this key to assign label">{realIdx + 1}</kbd>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px' }}>
+                        <div style={{ width: 12, height: 12, borderRadius: 3, background: lbl.color, flexShrink: 0 }} />
+                        <span style={{ flex: 1, fontSize: 13, fontWeight: selectedLabel === lbl.name ? 600 : 400, color: selectedLabel === lbl.name ? '#1890ff' : '#262626' }}>{lbl.name}</span>
+                        {realIdx < 9 && (
+                          <kbd style={{ fontSize: 9, background: '#e8e8e8', borderRadius: 3, padding: '1px 4px', color: '#595959', flexShrink: 0 }} title="Press this key to assign label">{realIdx + 1}</kbd>
+                        )}
+                        {selectedShapeId && shapes.find(s => s.id === selectedShapeId)?.label === lbl.name
+                          ? <span style={{ fontSize: 10, color: '#722ed1' }}>selected</span>
+                          : selectedLabel === lbl.name && !selectedShapeId && <span style={{ fontSize: 10, color: '#1890ff' }}>active</span>}
+                        {description && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" strokeWidth="2" style={{ flexShrink: 0 }}><title>Has guidelines</title><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                        )}
+                      </div>
+                      {description && (
+                        <div style={{ padding: '0 8px 7px 28px', fontSize: 11, color: '#595959', lineHeight: 1.5, borderTop: '1px dashed #d4edff', marginTop: -1, paddingTop: 5 }}>
+                          {description}
+                        </div>
                       )}
-                      {selectedShapeId && shapes.find(s => s.id === selectedShapeId)?.label === lbl.name
-                        ? <span style={{ fontSize: 10, color: '#722ed1' }}>selected</span>
-                        : selectedLabel === lbl.name && !selectedShapeId && <span style={{ fontSize: 10, color: '#1890ff' }}>active</span>}
                     </div>
                   );
                 })}

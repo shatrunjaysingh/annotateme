@@ -1,24 +1,96 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Navbar from '../components/Navbar';
 import client from '../api/client';
 
 const GRAFANA_DASHBOARD = '/grafana/d/annotateme-main/annotateme-analytics?orgId=1&kiosk=tv&refresh=30s';
 
+interface JobStats { total: number; new: number; in_progress: number; completed: number; rejected: number; }
 interface Stats {
-  projects: number;
-  tasks: number;
-  jobs: { total: number; new: number; in_progress: number; completed: number; rejected: number };
-  completionRate: number;
-  projectBreakdown: { name: string; tasks: number; jobs: number }[];
+  projects: number; tasks: number; jobs: JobStats; completionRate: number;
+  projectBreakdown: { name: string; id: string; tasks: number; jobs: number }[];
+}
+interface ClassRow { label: string; count: number; }
+interface LeaderRow { id: string; username: string; frames: number; shapes: number; }
+interface VelocityRow { date: string; saves: number; }
+interface ProjectSummary { tasks: number; jobs: JobStats; }
+
+const jobColors: Record<string, string> = { new: '#8c8c8c', in_progress: '#1890ff', completed: '#52c41a', rejected: '#ff4d4f' };
+
+// Simple inline SVG horizontal bar chart
+function HBar({ rows, colorFn }: { rows: { label: string; value: number; color?: string }[]; colorFn?: (label: string, i: number) => string }) {
+  const max = Math.max(...rows.map(r => r.value), 1);
+  const PALETTE = ['#1890ff','#52c41a','#fa8c16','#eb2f96','#722ed1','#13c2c2','#ff4d4f','#fadb14','#2f54eb','#389e0d'];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rows.map((r, i) => (
+        <div key={r.label}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }} title={r.label}>{r.label}</span>
+            <span style={{ fontWeight: 600, flexShrink: 0, marginLeft: 8 }}>{r.value.toLocaleString()}</span>
+          </div>
+          <div style={{ height: 8, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${(r.value / max) * 100}%`, background: r.color ?? (colorFn ? colorFn(r.label, i) : PALETTE[i % PALETTE.length]), borderRadius: 4, transition: 'width 0.6s ease' }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Sparkline SVG line chart
+function Sparkline({ data, color = '#1890ff' }: { data: { date: string; value: number }[]; color?: string }) {
+  if (!data.length) return <div style={{ color: '#8c8c8c', fontSize: 13, textAlign: 'center', paddingTop: 20 }}>No data yet</div>;
+  const W = 360, H = 80, PAD = 8;
+  const maxV = Math.max(...data.map(d => d.value), 1);
+  const xStep = data.length > 1 ? (W - PAD * 2) / (data.length - 1) : W - PAD * 2;
+  const pts = data.map((d, i) => ({
+    x: PAD + i * xStep,
+    y: PAD + (1 - d.value / maxV) * (H - PAD * 2),
+  }));
+  const pathD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const areaD = pathD + ` L${pts[pts.length - 1].x.toFixed(1)},${(H - PAD).toFixed(1)} L${pts[0].x.toFixed(1)},${(H - PAD).toFixed(1)} Z`;
+  const labelStep = Math.ceil(data.length / 5);
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+        <defs>
+          <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={areaD} fill="url(#sg)" />
+        <path d={pathD} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {pts.filter((_, i) => i % labelStep === 0 || i === data.length - 1).map((p, j) => {
+          const origIdx = data.findIndex((_, k) => k % labelStep === 0 || k === data.length - 1);
+          const idx = data.findIndex((d, k) => (k % labelStep === 0 || k === data.length - 1) && k >= j * labelStep);
+          return (
+            <text key={j} x={p.x} y={H} textAnchor="middle" fontSize="9" fill="#8c8c8c">
+              {data[Math.min(j * labelStep, data.length - 1)]?.date?.slice(5)}
+            </text>
+          );
+        })}
+        {pts.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="3" fill={color} opacity="0.7" />
+        ))}
+      </svg>
+    </div>
+  );
 }
 
 export default function Analytics() {
-  const [grafanaUp, setGrafanaUp] = useState<boolean | null>(null); // null = checking
+  const [grafanaUp, setGrafanaUp] = useState<boolean | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Check if Grafana is actually reachable — must return JSON with database:ok,
-  // not the React app's index.html fallback which also returns HTTP 200.
+  // Project-level analytics
+  const [selectedProject, setSelectedProject] = useState<string>('');
+  const [classDist, setClassDist] = useState<ClassRow[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderRow[]>([]);
+  const [velocity, setVelocity] = useState<VelocityRow[]>([]);
+  const [projectSummary, setProjectSummary] = useState<ProjectSummary | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
   useEffect(() => {
     fetch('/grafana/api/health', { signal: AbortSignal.timeout(3000) })
       .then(async r => {
@@ -30,7 +102,6 @@ export default function Analytics() {
       .catch(() => setGrafanaUp(false));
   }, []);
 
-  // Load built-in stats regardless (used when Grafana is down)
   useEffect(() => {
     const load = async () => {
       try {
@@ -38,7 +109,7 @@ export default function Analytics() {
         const projects = projRes.data;
         const tasks = taskRes.data;
         let total = 0, newJ = 0, inProg = 0, completed = 0, rejected = 0;
-        const breakdown: any[] = [];
+        const breakdown: { name: string; id: string; tasks: number; jobs: number }[] = [];
         for (const p of projects) {
           const pTasks = tasks.filter((t: any) => t.projectId === p.id);
           let pJobs = 0;
@@ -52,17 +123,41 @@ export default function Analytics() {
               if (j.state === 'rejected') rejected++;
             });
           }
-          breakdown.push({ name: p.name, tasks: pTasks.length, jobs: pJobs });
+          breakdown.push({ name: p.name, id: p.id, tasks: pTasks.length, jobs: pJobs });
         }
         setStats({ projects: projects.length, tasks: tasks.length, jobs: { total, new: newJ, in_progress: inProg, completed, rejected }, completionRate: total > 0 ? Math.round((completed / total) * 100) : 0, projectBreakdown: breakdown });
+        if (projects.length > 0 && !selectedProject) setSelectedProject(projects[0].id);
       } catch { /* no-op */ }
       finally { setLoading(false); }
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const jobColors: Record<string, string> = { new: '#8c8c8c', in_progress: '#1890ff', completed: '#52c41a', rejected: '#ff4d4f' };
+  const loadProjectDetail = useCallback(async (pid: string) => {
+    if (!pid) return;
+    setDetailLoading(true);
+    try {
+      const [cdRes, lbRes, velRes, sumRes] = await Promise.all([
+        client.get(`/analytics/class-distribution/${pid}`),
+        client.get(`/analytics/leaderboard/${pid}`),
+        client.get(`/analytics/velocity/${pid}`),
+        client.get(`/analytics/summary/${pid}`),
+      ]);
+      setClassDist(cdRes.data);
+      setLeaderboard(lbRes.data);
+      setVelocity(velRes.data);
+      setProjectSummary(sumRes.data);
+    } catch { /* no-op */ }
+    finally { setDetailLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (selectedProject) loadProjectDetail(selectedProject);
+  }, [selectedProject, loadProjectDetail]);
+
   const maxJobs = stats ? Math.max(...stats.projectBreakdown.map(p => p.jobs), 1) : 1;
+  const selectedProjectName = stats?.projectBreakdown.find(p => p.id === selectedProject)?.name;
 
   return (
     <div style={{ minHeight: '100vh', background: '#f0f2f5', display: 'flex', flexDirection: 'column' }}>
@@ -86,7 +181,7 @@ export default function Analytics() {
           )}
         </div>
 
-        {/* Grafana iframe — only when confirmed up */}
+        {/* Grafana iframe */}
         {grafanaUp === true && (
           <div className="card" style={{ flex: 1, minHeight: 700, padding: 0, overflow: 'hidden' }}>
             <iframe
@@ -98,13 +193,13 @@ export default function Analytics() {
           </div>
         )}
 
-        {/* Built-in charts — shown when Grafana is down or still checking */}
+        {/* Built-in dashboard */}
         {grafanaUp !== true && (
           loading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 80 }}><span className="spinner" /></div>
           ) : (
             <>
-              {/* Stat cards */}
+              {/* Top stat cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
                 {[
                   { label: 'Projects', value: stats?.projects ?? 0, color: '#1890ff' },
@@ -120,46 +215,140 @@ export default function Analytics() {
                 ))}
               </div>
 
+              {/* Row 2: job status + jobs per project */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                {/* Job status */}
                 <div className="card" style={{ padding: 20 }}>
-                  <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, marginTop: 0 }}>Job Status</h3>
-                  {stats && Object.entries(stats.jobs).filter(([k]) => k !== 'total').map(([state, count]) => {
-                    const pct = stats.jobs.total > 0 ? (count as number / stats.jobs.total * 100) : 0;
-                    return (
-                      <div key={state} style={{ marginBottom: 12 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                          <span style={{ textTransform: 'capitalize' }}>{state.replace('_', ' ')}</span>
-                          <span style={{ fontWeight: 600, color: jobColors[state] }}>{count as number}</span>
-                        </div>
-                        <div style={{ height: 6, background: '#f0f0f0', borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${pct}%`, background: jobColors[state], borderRadius: 3, transition: 'width 0.5s' }} />
-                        </div>
-                      </div>
-                    );
-                  })}
+                  <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, marginTop: 0 }}>Job Status (all projects)</h3>
+                  {stats && (
+                    <HBar
+                      rows={Object.entries(stats.jobs)
+                        .filter(([k]) => k !== 'total')
+                        .map(([state, count]) => ({ label: state.replace('_', ' '), value: count as number, color: jobColors[state] }))}
+                    />
+                  )}
                 </div>
-
-                {/* Jobs per project */}
                 <div className="card" style={{ padding: 20 }}>
                   <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, marginTop: 0 }}>Jobs per Project</h3>
                   {!stats?.projectBreakdown.length ? (
                     <div style={{ color: '#8c8c8c', fontSize: 13, textAlign: 'center', paddingTop: 20 }}>No data yet</div>
-                  ) : stats.projectBreakdown.map(p => (
-                    <div key={p.name} style={{ marginBottom: 10 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 3 }}>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>{p.name}</span>
-                        <span style={{ fontWeight: 600, color: '#1890ff', flexShrink: 0 }}>{p.jobs} jobs</span>
-                      </div>
-                      <div style={{ height: 6, background: '#f0f0f0', borderRadius: 3, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${(p.jobs / maxJobs) * 100}%`, background: '#1890ff', borderRadius: 3 }} />
-                      </div>
-                    </div>
-                  ))}
+                  ) : (
+                    <HBar rows={stats.projectBreakdown.map(p => ({ label: p.name, value: p.jobs }))} />
+                  )}
                 </div>
               </div>
 
-              {/* Grafana callout when it's confirmed down */}
+              {/* Project selector */}
+              {stats && stats.projectBreakdown.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: '#595959' }}>Project detail:</span>
+                  <select value={selectedProject} onChange={e => setSelectedProject(e.target.value)}
+                    style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d9d9d9', fontSize: 13, background: '#fff', cursor: 'pointer', minWidth: 200 }}>
+                    {stats.projectBreakdown.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  {detailLoading && <span className="spinner" style={{ width: 16, height: 16 }} />}
+                </div>
+              )}
+
+              {/* Project detail cards */}
+              {selectedProject && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+
+                  {/* Class distribution */}
+                  <div className="card" style={{ padding: 20 }}>
+                    <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, marginTop: 0, color: '#262626' }}>
+                      Label Distribution
+                      <span style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 400, marginLeft: 6 }}>shapes per class</span>
+                    </h3>
+                    {detailLoading ? (
+                      <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><span className="spinner" /></div>
+                    ) : !classDist.length ? (
+                      <div style={{ color: '#8c8c8c', fontSize: 13, textAlign: 'center', paddingTop: 20 }}>No annotations yet</div>
+                    ) : (
+                      <HBar rows={classDist.map(r => ({ label: r.label, value: r.count }))} />
+                    )}
+                  </div>
+
+                  {/* Annotator leaderboard */}
+                  <div className="card" style={{ padding: 20 }}>
+                    <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, marginTop: 0, color: '#262626' }}>
+                      Annotator Leaderboard
+                      <span style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 400, marginLeft: 6 }}>top contributors</span>
+                    </h3>
+                    {detailLoading ? (
+                      <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><span className="spinner" /></div>
+                    ) : !leaderboard.length ? (
+                      <div style={{ color: '#8c8c8c', fontSize: 13, textAlign: 'center', paddingTop: 20 }}>No data yet</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {leaderboard.map((r, i) => (
+                          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ width: 22, height: 22, borderRadius: '50%', background: i === 0 ? '#fadb14' : i === 1 ? '#d9d9d9' : i === 2 ? '#fa8c16' : '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0, color: i < 3 ? '#262626' : '#8c8c8c' }}>
+                              {i + 1}
+                            </div>
+                            <span style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.username}</span>
+                            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1890ff' }}>{r.shapes.toLocaleString()}</div>
+                              <div style={{ fontSize: 10, color: '#8c8c8c' }}>{r.frames} frames</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Annotation velocity */}
+                  <div className="card" style={{ padding: 20 }}>
+                    <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, marginTop: 0, color: '#262626' }}>
+                      Annotation Velocity
+                      <span style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 400, marginLeft: 6 }}>saves / day (30d)</span>
+                    </h3>
+                    {detailLoading ? (
+                      <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><span className="spinner" /></div>
+                    ) : (
+                      <Sparkline data={velocity.map(r => ({ date: r.date, value: r.saves }))} />
+                    )}
+                    {velocity.length > 0 && (
+                      <div style={{ marginTop: 10, display: 'flex', gap: 16, justifyContent: 'center' }}>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#1890ff' }}>{velocity.reduce((s, r) => s + r.saves, 0)}</div>
+                          <div style={{ fontSize: 10, color: '#8c8c8c' }}>total saves</div>
+                        </div>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{Math.round(velocity.reduce((s, r) => s + r.saves, 0) / velocity.length)}</div>
+                          <div style={{ fontSize: 10, color: '#8c8c8c' }}>avg / day</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              )}
+
+              {/* Job status for selected project */}
+              {selectedProject && projectSummary && !detailLoading && (
+                <div className="card" style={{ padding: 20 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, marginTop: 0 }}>
+                    Job Status — {selectedProjectName}
+                  </h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12 }}>
+                    {[
+                      { label: 'Tasks', value: projectSummary.tasks, color: '#722ed1' },
+                      { label: 'New', value: projectSummary.jobs.new, color: '#8c8c8c' },
+                      { label: 'In Progress', value: projectSummary.jobs.in_progress, color: '#1890ff' },
+                      { label: 'Completed', value: projectSummary.jobs.completed, color: '#52c41a' },
+                      { label: 'Rejected', value: projectSummary.jobs.rejected, color: '#ff4d4f' },
+                    ].map(c => (
+                      <div key={c.label} style={{ padding: '12px 14px', borderRadius: 8, background: '#fafafa', border: '1px solid #f0f0f0', borderLeft: `3px solid ${c.color}` }}>
+                        <div style={{ fontSize: 22, fontWeight: 700, color: c.color }}>{c.value}</div>
+                        <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 2 }}>{c.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {grafanaUp === false && (
                 <div style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 8, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fa8c16" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
