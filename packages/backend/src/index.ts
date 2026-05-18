@@ -20,6 +20,7 @@ import reportRoutes from "./routes/reports";
 import tenantRoutes from "./routes/tenants";
 import aiRoutes from "./routes/ai";
 import auditRoutes from "./routes/audits";
+import webhookRoutes from "./routes/webhooks";
 
 const app: Express = express();
 const httpServer = createServer(app);
@@ -78,6 +79,7 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/tenants", tenantRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/audits", auditRoutes);
+app.use("/api/webhooks", webhookRoutes);
 
 // Health check
 app.get("/health", (_req, res) => res.json({ status: "ok", timestamp: new Date().toISOString() }));

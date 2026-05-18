@@ -9,6 +9,7 @@ const baseLinks = [
   { to: '/tasks', label: 'Tasks' },
   { to: '/jobs', label: 'Jobs' },
   { to: '/annotations', label: 'Annotations' },
+  { to: '/tenants', label: 'Tenants' },
   { to: '/cloud-storage', label: 'Cloud Storages' },
   { to: '/analytics', label: 'Analytics' },
   { to: '/reports', label: 'Reports' },
@@ -110,6 +111,7 @@ export default function Navbar() {
   const navLinks = [
     ...baseLinks,
     ...(user?.role === 'admin' || user?.role === 'manager' ? [{ to: '/supervisor', label: 'Supervisor' }] : []),
+    ...(user?.role === 'admin' ? [{ to: '/webhooks', label: 'Webhooks' }] : []),
     ...(user?.role === 'admin' ? [{ to: '/admin', label: 'Admin' }] : []),
   ];
 

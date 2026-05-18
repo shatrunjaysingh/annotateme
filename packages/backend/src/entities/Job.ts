@@ -64,4 +64,7 @@ export class Job {
 
   @Column({ nullable: true, type: 'text' })
   reviewNote: string;
+
+  @Column({ type: 'json', nullable: true, default: null })
+  tracks: any[] | null;
 }

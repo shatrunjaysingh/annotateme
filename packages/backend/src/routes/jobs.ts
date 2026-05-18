@@ -4,6 +4,7 @@ import { Job } from "../entities/Job";
 import { Annotation } from "../entities/Annotation";
 import { authMiddleware, AuthRequest } from "../middlewares/auth";
 import { logJobAudit, diffFields } from "../services/audit.service";
+import { fireWebhook } from "../services/webhook.service";
 
 const router = Router();
 router.use(authMiddleware);
@@ -91,6 +92,26 @@ router.patch("/:id", async (req: AuthRequest, res) => {
     });
     res.json(updated);
 
+    // Fire webhooks — fire-and-forget, never block the response
+    if (Object.keys(changes).length > 0) {
+      const webhookPayload = {
+        jobId: job.id,
+        taskId: job.taskId,
+        stage: job.stage,
+        state: job.state,
+        assigneeId: job.assigneeId,
+      };
+      if (changes.state?.to === "completed") {
+        fireWebhook("job.completed", webhookPayload);
+      }
+      if (changes.state?.to === "rejected") {
+        fireWebhook("job.rejected", webhookPayload);
+      }
+      if (changes.stage) {
+        fireWebhook("job.stage_changed", webhookPayload);
+      }
+    }
+
     // Fire-and-forget audit entries — pick the most specific action type
     if (Object.keys(changes).length > 0) {
       const action = changes.stage
@@ -143,7 +164,7 @@ router.get("/:id/frame/:frameNum", async (req: AuthRequest, res) => {
 router.post("/:id/frame/:frameNum", async (req: AuthRequest, res) => {
   try {
     const { id, frameNum } = req.params;
-    const { shapes, tags, tracks } = req.body;
+    const { shapes, tags, tracks, timeSpentMs } = req.body;
     const frameNumber = parseInt(frameNum);
 
     const job = await jobRepo.findOne({ where: { id } });
@@ -176,18 +197,43 @@ router.post("/:id/frame/:frameNum", async (req: AuthRequest, res) => {
 
     // Audit (fire-and-forget)
     const shapeCount = (shapes || []).length;
+    const timeSec = timeSpentMs ? `, ${Math.round(timeSpentMs / 1000)}s` : "";
     logJobAudit({
       jobId: id,
       taskId: job.taskId,
       userId: req.user!.id,
       action: "annotation_saved",
-      note: `Frame ${frameNumber}: ${shapeCount} shape${shapeCount !== 1 ? "s" : ""} saved`,
+      note: `Frame ${frameNumber}: ${shapeCount} shape${shapeCount !== 1 ? "s" : ""} saved${timeSec}`,
     });
     if (wasNew) {
       logJobAudit({ jobId: id, taskId: job.taskId, userId: req.user!.id, action: "state_changed", changes: { state: { from: prevState, to: "in_progress" } } });
     }
   } catch {
     res.status(500).json({ error: "Failed to save annotations" });
+  }
+});
+
+// GET /:id/tracks — return the full track list for a job
+router.get("/:id/tracks", async (req: AuthRequest, res) => {
+  try {
+    const job = await jobRepo.findOne({ where: { id: req.params.id } });
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    res.json(job.tracks || []);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch tracks" });
+  }
+});
+
+// PUT /:id/tracks — save the full track list for a job
+router.put("/:id/tracks", async (req: AuthRequest, res) => {
+  try {
+    const job = await jobRepo.findOne({ where: { id: req.params.id } });
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    job.tracks = req.body.tracks || [];
+    await jobRepo.save(job);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: "Failed to save tracks" });
   }
 });
 

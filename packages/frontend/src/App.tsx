@@ -15,6 +15,8 @@ import Reports from './pages/Reports';
 import Tasks from './pages/Tasks';
 import AdminPage from './pages/AdminPage';
 import SupervisorPage from './pages/SupervisorPage';
+import Tenants from './pages/Tenants';
+import Webhooks from './pages/Webhooks';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 
@@ -36,6 +38,10 @@ export default function App() {
       <Route path="/cloud-storage" element={<ProtectedRoute><CloudStorage /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />
       <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+
+      <Route path="/tenants" element={<ProtectedRoute><Tenants /></ProtectedRoute>} />
+
+      <Route path="/webhooks" element={<RoleRoute roles={['admin']}><Webhooks /></RoleRoute>} />
 
       {/* Role-protected screens */}
       <Route path="/admin" element={<RoleRoute roles={['admin']}><AdminPage /></RoleRoute>} />

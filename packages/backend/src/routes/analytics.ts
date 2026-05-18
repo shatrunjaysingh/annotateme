@@ -54,13 +54,13 @@ router.get("/class-distribution/:projectId", async (req: AuthRequest, res) => {
     const { projectId } = req.params;
     const rows = await AppDataSource.query(`
       SELECT shape->>'label' AS label, COUNT(*)::int AS count
-      FROM annotations a,
-           jsonb_array_elements(a.shapes) AS shape
-      JOIN jobs j ON j.id = a."jobId"
+      FROM annotations a
+      JOIN jobs j ON j.id::text = a."jobId"
       JOIN tasks t ON t.id = j."taskId"
-      WHERE t."projectId" = $1
+      CROSS JOIN LATERAL json_array_elements(a.shapes) AS shape
+      WHERE t."projectId" = $1::uuid
         AND a.shapes IS NOT NULL
-        AND jsonb_array_length(a.shapes) > 0
+        AND json_array_length(a.shapes) > 0
       GROUP BY shape->>'label'
       ORDER BY count DESC
     `, [projectId]);
@@ -81,12 +81,12 @@ router.get("/leaderboard/:projectId", async (req: AuthRequest, res) => {
         u.id,
         u.username,
         COUNT(DISTINCT a.id)::int AS frames,
-        COALESCE(SUM(jsonb_array_length(a.shapes)), 0)::int AS shapes
+        COALESCE(SUM(json_array_length(a.shapes)), 0)::int AS shapes
       FROM annotations a
-      JOIN jobs j ON j.id = a."jobId"
+      JOIN jobs j ON j.id::text = a."jobId"
       JOIN tasks t ON t.id = j."taskId"
       JOIN users u ON u.id = j."assigneeId"
-      WHERE t."projectId" = $1
+      WHERE t."projectId" = $1::uuid
         AND a.shapes IS NOT NULL
       GROUP BY u.id, u.username
       ORDER BY shapes DESC

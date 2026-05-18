@@ -42,6 +42,54 @@ const TOOL_LABELS: Record<ToolType, string> = { select: 'Select', rect: 'Rectang
 type SortBy = 'id' | 'id_desc' | 'label' | 'area';
 type ColorBy = 'label' | 'instance';
 
+// ─── Track interpolation utilities ───────────────────────────────────────────
+function lerpPts(a: { x: number; y: number }[], b: { x: number; y: number }[], t: number) {
+  if (a.length !== b.length) return a;
+  return a.map((pt, i) => ({ x: pt.x + (b[i].x - pt.x) * t, y: pt.y + (b[i].y - pt.y) * t }));
+}
+
+interface TrackShape {
+  id: string; type: 'rect'; label: string; color: string;
+  points: { x: number; y: number }[];
+  occluded?: boolean; attributes: Record<string, unknown>;
+  trackId: string; isInterpolated: boolean;
+}
+
+function computeTrackShapes(
+  tracks: { id: string; label: string; color: string; keyframes: Record<string, { points: { x: number; y: number }[]; occluded?: boolean; attributes?: Record<string, unknown> }> }[],
+  frame: number
+): TrackShape[] {
+  return tracks.flatMap(tr => {
+    const kfNums = Object.keys(tr.keyframes).map(Number).sort((a, b) => a - b);
+    if (!kfNums.length) return [];
+    const exact = tr.keyframes[frame];
+    if (exact) return [{ id: `track_${tr.id}_${frame}`, type: 'rect' as const, label: tr.label, color: tr.color, points: exact.points, occluded: exact.occluded, attributes: (exact.attributes || {}) as Record<string, unknown>, trackId: tr.id, isInterpolated: false } as TrackShape];
+    const prev = [...kfNums].filter(f => f < frame).pop();
+    const next = kfNums.find(f => f > frame);
+    if (prev === undefined || next === undefined) return [];
+    const t = (frame - prev) / (next - prev);
+    const pk = tr.keyframes[prev], nk = tr.keyframes[next];
+    if (pk.points.length !== nk.points.length) return [];
+    return [{ id: `track_${tr.id}_${frame}`, type: 'rect' as const, label: tr.label, color: tr.color, points: lerpPts(pk.points, nk.points, t), occluded: undefined, attributes: {} as Record<string, unknown>, trackId: tr.id, isInterpolated: true } as TrackShape];
+  });
+}
+
+// ─── Automated QA utilities ───────────────────────────────────────────────────
+function rectBounds(pts: { x: number; y: number }[]) {
+  if (pts.length < 2) return null;
+  return { x1: Math.min(pts[0].x, pts[1].x), y1: Math.min(pts[0].y, pts[1].y), x2: Math.max(pts[0].x, pts[1].x), y2: Math.max(pts[0].y, pts[1].y) };
+}
+function shapeIoU(a: { type: string; points: { x: number; y: number }[] }, b: { type: string; points: { x: number; y: number }[] }): number {
+  if (a.type !== 'rect' || b.type !== 'rect') return 0;
+  const ar = rectBounds(a.points), br = rectBounds(b.points);
+  if (!ar || !br) return 0;
+  const ix1 = Math.max(ar.x1, br.x1), iy1 = Math.max(ar.y1, br.y1);
+  const ix2 = Math.min(ar.x2, br.x2), iy2 = Math.min(ar.y2, br.y2);
+  if (ix2 <= ix1 || iy2 <= iy1) return 0;
+  const inter = (ix2 - ix1) * (iy2 - iy1);
+  return inter / ((ar.x2 - ar.x1) * (ar.y2 - ar.y1) + (br.x2 - br.x1) * (br.y2 - br.y1) - inter);
+}
+
 export default function AnnotationEditor() {
   const { id: jobId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -155,6 +203,22 @@ export default function AnnotationEditor() {
   const dataType = (job?.task?.project as any)?.dataType?.toLowerCase() || '';
   const isTextMode = dataType === 'text' || dataType === 'csv';
 
+  // Object tracking
+  interface TrackKeyframe { points: { x: number; y: number }[]; occluded?: boolean; attributes?: Record<string, unknown>; }
+  interface Track { id: string; label: string; color: string; keyframes: Record<string, TrackKeyframe>; }
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [tracksLoaded, setTracksLoaded] = useState(false);
+
+  // QA (automated quality checks)
+  const [qaOpen, setQaOpen] = useState(false);
+
+  // Active learning — per-frame min confidence from AI shapes
+  const [frameConfidence, setFrameConfidence] = useState<Record<number, number>>({});
+  const [sortByUncertainty, setSortByUncertainty] = useState(false);
+
+  // Time-per-frame tracking
+  const frameStartTime = useRef<number>(Date.now());
+
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameLoadingRef = useRef(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -261,7 +325,12 @@ export default function AnnotationEditor() {
       try {
         const { data } = await client.get(`/jobs/${jobId}/frame/${frameNum}`);
         if (!isCurrent) return;
-        setShapes(data.shapes || []);
+        // Merge saved shapes with interpolated track shapes
+        const trackShapes = computeTrackShapes(tracks, frameNum) as any[];
+        // Don't add track shapes whose track already has a keyframe saved in data.shapes
+        const savedTrackIds = new Set((data.shapes || []).map((s: any) => s.trackId).filter(Boolean));
+        const filteredTrackShapes = trackShapes.filter(ts => !savedTrackIds.has(ts.trackId));
+        setShapes([...(data.shapes || []), ...filteredTrackShapes]);
         setCuboids(data.cuboids || []);
         if (data.textSpans) setTextSpans(data.textSpans);
       } catch (err: any) {
@@ -274,7 +343,7 @@ export default function AnnotationEditor() {
     };
     load();
     return () => { isCurrent = false; };
-  }, [jobId, frameNum, setShapes, clearShapes]);
+  }, [jobId, frameNum, setShapes, clearShapes, tracks]);
 
   // Load text content for text/csv frames
   useEffect(() => {
@@ -319,7 +388,24 @@ export default function AnnotationEditor() {
     if (!jobId || !isEditable) return;
     if (!silent) setSaving(true);
     try {
-      await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes, cuboids, tags: [], tracks: [] });
+      const timeSpentMs = Date.now() - frameStartTime.current;
+
+      // Separate track shapes from regular shapes
+      const regularShapes = shapes.filter(s => !s.trackId);
+      const trackedShapes = shapes.filter(s => s.trackId);
+
+      // If tracked shapes exist on this frame, update their track keyframes
+      if (trackedShapes.length > 0) {
+        const updatedTracks = tracks.map(tr => {
+          const ts = trackedShapes.find(s => s.trackId === tr.id);
+          if (!ts) return tr;
+          return { ...tr, keyframes: { ...tr.keyframes, [frameNum]: { points: ts.points, occluded: ts.occluded, attributes: ts.attributes } } };
+        });
+        setTracks(updatedTracks);
+        client.put(`/jobs/${jobId}/tracks`, { tracks: updatedTracks }).catch(() => {});
+      }
+
+      await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes: regularShapes, cuboids, tags: [], tracks: [], timeSpentMs });
       // Auto-reopen: annotation stage job that was marked completed gets reset to in_progress
       if (job?.stage === 'annotation' && job?.state === 'completed') {
         setJob(j => j ? { ...j, state: 'in_progress' } : j);
@@ -328,7 +414,7 @@ export default function AnnotationEditor() {
       if (!silent) { setSaved(true); setTimeout(() => setSaved(false), 2000); }
     } catch { /* no-op */ }
     finally { if (!silent) setSaving(false); }
-  }, [jobId, frameNum, shapes, cuboids, isEditable, job?.stage, job?.state, setJob]);
+  }, [jobId, frameNum, shapes, cuboids, isEditable, job?.stage, job?.state, setJob, tracks]);
 
   useEffect(() => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
@@ -384,7 +470,17 @@ export default function AnnotationEditor() {
     if (clamped === frameNum) return;
     // Only save if the frame has fully loaded — avoids overwriting annotations with an empty array
     if (jobId && !frameLoadingRef.current && isEditable) {
-      try { await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes, cuboids, tags: [], tracks: [] }); } catch { /* no-op */ }
+      const regularShapes = shapes.filter(s => !s.trackId);
+      const trackedShapes = shapes.filter(s => s.trackId);
+      if (trackedShapes.length > 0) {
+        const updatedTracks = tracks.map(tr => {
+          const ts = trackedShapes.find(s => s.trackId === tr.id);
+          if (!ts) return tr;
+          return { ...tr, keyframes: { ...tr.keyframes, [frameNum]: { points: ts.points, occluded: ts.occluded, attributes: ts.attributes } } };
+        });
+        client.put(`/jobs/${jobId}/tracks`, { tracks: updatedTracks }).catch(() => {});
+      }
+      try { await client.post(`/jobs/${jobId}/frame/${frameNum}`, { shapes: regularShapes, cuboids, tags: [], tracks: [] }); } catch { /* no-op */ }
     }
     setFrameNum(clamped);
   }, [jobId, frameNum, shapes, cuboids, files.length, job?.frameStart, job?.frameEnd, isEditable]);
@@ -480,6 +576,53 @@ export default function AnnotationEditor() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Load job tracks when job is ready
+  useEffect(() => {
+    if (!jobId || tracksLoaded) return;
+    client.get(`/jobs/${jobId}/tracks`).then(({ data }) => {
+      setTracks(Array.isArray(data) ? data : []);
+      setTracksLoaded(true);
+    }).catch(() => setTracksLoaded(true));
+  }, [jobId, tracksLoaded]);
+
+  // Reset per-frame timer whenever we navigate to a new frame
+  useEffect(() => { frameStartTime.current = Date.now(); }, [frameNum]);
+
+  // Record per-frame confidence from AI-annotated shapes
+  useEffect(() => {
+    const aiShapes = shapes.filter(s => s.confidence !== undefined && s.confidence > 0);
+    if (aiShapes.length > 0) {
+      const minConf = Math.min(...aiShapes.map(s => s.confidence!));
+      setFrameConfidence(prev => ({ ...prev, [frameNum]: minConf }));
+    }
+  }, [shapes, frameNum]);
+
+  // QA issues: overlapping shapes + duplicate labels
+  const qaIssues = useMemo(() => {
+    const issues: { type: 'overlap' | 'tiny'; id: string; msg: string }[] = [];
+    const visibleShapes = shapes.filter(s => !s.hidden);
+    for (let i = 0; i < visibleShapes.length; i++) {
+      for (let j = i + 1; j < visibleShapes.length; j++) {
+        const iou = shapeIoU(visibleShapes[i], visibleShapes[j]);
+        if (iou > 0.5) issues.push({ type: 'overlap', id: visibleShapes[i].id, msg: `"${visibleShapes[i].label}" overlaps "${visibleShapes[j].label}" (IoU ${iou.toFixed(2)})` });
+      }
+      if (visibleShapes[i].type === 'rect') {
+        const r = rectBounds(visibleShapes[i].points);
+        if (r && (r.x2 - r.x1) < 8 && (r.y2 - r.y1) < 8) issues.push({ type: 'tiny', id: visibleShapes[i].id, msg: `"${visibleShapes[i].label}" is very small (<8px)` });
+      }
+    }
+    return issues;
+  }, [shapes]);
+
+  // Sorted frame list for active learning (lowest confidence first)
+  const uncertainFrameOrder = useMemo(() => {
+    return files.map((_, i) => i).sort((a, b) => {
+      const ca = frameConfidence[a] ?? 1;
+      const cb = frameConfidence[b] ?? 1;
+      return ca - cb;
+    });
+  }, [files, frameConfidence]);
 
   // Sort shapes for Objects list
   const sortedShapes = useMemo(() => {
@@ -1238,7 +1381,7 @@ export default function AnnotationEditor() {
             </div>
           )}
           {/* Image enhancement toggle */}
-          <div style={{ padding: '0 8px', borderLeft: '1px solid #e8e8e8', height: '100%', display: 'flex', alignItems: 'center' }}>
+          <div style={{ padding: '0 8px', borderLeft: '1px solid #e8e8e8', height: '100%', display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               onClick={() => setEnhanceOpen(o => !o)}
               title="Image enhancement (brightness, contrast, saturation)"
@@ -1246,6 +1389,21 @@ export default function AnnotationEditor() {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
               Enhance
             </button>
+            {/* QA warning badge */}
+            <button onClick={() => setQaOpen(o => !o)} title={`${qaIssues.length} QA issue${qaIssues.length !== 1 ? 's' : ''}`}
+              style={{ padding: '4px 10px', borderRadius: 4, border: `1px solid ${qaIssues.length > 0 ? '#ff4d4f' : '#d9d9d9'}`, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, background: qaOpen ? '#fff1f0' : qaIssues.length > 0 ? '#fff1f0' : '#fff', color: qaIssues.length > 0 ? '#ff4d4f' : '#8c8c8c', fontWeight: qaIssues.length > 0 ? 600 : 400, transition: 'all 0.15s' }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              QA {qaIssues.length > 0 ? `(${qaIssues.length})` : '✓'}
+            </button>
+            {/* Active learning: jump to most uncertain frame */}
+            {sortByUncertainty && (
+              <button onClick={() => { const next = uncertainFrameOrder.find(f => f !== frameNum); if (next !== undefined) goToFrame(next); }}
+                title="Jump to most uncertain frame"
+                style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #722ed1', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, background: '#f9f0ff', color: '#722ed1', fontWeight: 600 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                Uncertain
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1587,6 +1745,32 @@ export default function AnnotationEditor() {
             </div>
           )}
 
+          {/* QA panel */}
+          {qaOpen && (
+            <div style={{ position: 'absolute', bottom: 16, left: enhanceOpen ? 272 : 16, background: '#fff', border: `1px solid ${qaIssues.length > 0 ? '#ffccc7' : '#b7eb8f'}`, borderRadius: 10, boxShadow: '0 4px 20px rgba(0,0,0,0.14)', padding: '14px 16px', minWidth: 280, maxWidth: 360, zIndex: 50 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <span style={{ fontWeight: 600, fontSize: 13, color: qaIssues.length > 0 ? '#cf1322' : '#389e0d' }}>
+                  {qaIssues.length > 0 ? `${qaIssues.length} QA Issue${qaIssues.length !== 1 ? 's' : ''}` : 'QA Passed'}
+                </span>
+                <button onClick={() => setQaOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8c8c8c', fontSize: 16, lineHeight: 1 }}>×</button>
+              </div>
+              {qaIssues.length === 0 ? (
+                <div style={{ fontSize: 12, color: '#389e0d' }}>No overlapping or tiny shapes detected.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {qaIssues.map((issue, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 8px', background: '#fff1f0', borderRadius: 6, fontSize: 12 }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                      <span style={{ color: '#595959', lineHeight: 1.4 }}>{issue.msg}</span>
+                      <button onClick={() => { selectShape(issue.id); setQaOpen(false); }}
+                        style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 10, color: '#1890ff', background: 'none', border: '1px solid #91caff', borderRadius: 3, cursor: 'pointer', padding: '1px 5px' }}>select</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Info overlay */}
           {infoOpen && job && (
             <div style={{ position: 'absolute', top: 8, right: 8, background: '#fff', border: '1px solid #e8e8e8', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.15)', padding: 16, minWidth: 260, zIndex: 50 }}>
@@ -1657,6 +1841,39 @@ export default function AnnotationEditor() {
             </div>
           )}
 
+          {/* Active Tracks panel (shows when tracks exist) */}
+          {activeTab === 'objects' && tracks.length > 0 && (
+            <div style={{ borderTop: '1px solid #e8e8e8', flexShrink: 0, padding: '8px 8px 0' }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#722ed1', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="23 7 16 12 23 17"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+                Tracks ({tracks.length})
+                <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#595959', fontWeight: 400, textTransform: 'none', letterSpacing: 0, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={sortByUncertainty} onChange={e => setSortByUncertainty(e.target.checked)} style={{ accentColor: '#722ed1' }} />
+                  Smart order
+                </label>
+              </div>
+              {tracks.map(tr => {
+                const kfNums = Object.keys(tr.keyframes).map(Number).sort((a, b) => a - b);
+                const isOnFrame = !!tr.keyframes[frameNum];
+                return (
+                  <div key={tr.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, padding: '4px 6px', borderRadius: 5, background: isOnFrame ? '#f9f0ff' : '#fafafa', border: `1px solid ${isOnFrame ? '#d3adf7' : '#f0f0f0'}` }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: tr.color, flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr.label}</span>
+                    <span style={{ fontSize: 10, color: '#8c8c8c' }}>{kfNums.length} kf</span>
+                    <button onClick={() => { if (kfNums.length) goToFrame(kfNums[0]); }} title="Go to first keyframe"
+                      style={{ fontSize: 9, color: '#722ed1', background: 'none', border: '1px solid #d3adf7', borderRadius: 3, cursor: 'pointer', padding: '1px 4px' }}>▶</button>
+                    <button onClick={() => {
+                      const updated = tracks.filter(t => t.id !== tr.id);
+                      setTracks(updated);
+                      client.put(`/jobs/${jobId!}/tracks`, { tracks: updated }).catch(() => {});
+                      setShapes(shapes.filter(s => s.trackId !== tr.id));
+                    }} title="Delete track" style={{ fontSize: 9, color: '#ff4d4f', background: 'none', border: 'none', cursor: 'pointer', padding: '1px 4px' }}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Selected shape card — shows when a 2D shape is selected */}
           {selectedShape && viewMode === '2d' && (() => {
             const fullLbl = fullLabels.find(l => l.name === selectedShape.label);
@@ -1678,6 +1895,35 @@ export default function AnnotationEditor() {
                     ✕
                   </button>
                 </div>
+                {/* Track object button — only for rect shapes not already tracked */}
+                {selectedShape.type === 'rect' && !selectedShape.trackId && isEditable && (
+                  <div style={{ marginBottom: 6 }}>
+                    <button onClick={() => {
+                      const trackId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+                      const newTrack = { id: trackId, label: selectedShape.label, color: selectedShape.color, keyframes: { [String(frameNum)]: { points: selectedShape.points, occluded: selectedShape.occluded, attributes: selectedShape.attributes as any } } };
+                      const updatedTracks = [...tracks, newTrack];
+                      setTracks(updatedTracks);
+                      updateShape(selectedShapeId!, { trackId, isInterpolated: false } as any);
+                      client.put(`/jobs/${jobId!}/tracks`, { tracks: updatedTracks }).catch(() => {});
+                      toast.success('Tracking started', 'This object will be interpolated between keyframes.');
+                    }} style={{ width: '100%', padding: '4px 0', borderRadius: 5, border: '1px solid #722ed1', background: '#f9f0ff', color: '#722ed1', cursor: 'pointer', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="23 7 16 12 23 17"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+                      Track this object across frames
+                    </button>
+                  </div>
+                )}
+                {selectedShape.trackId && (
+                  <div style={{ marginBottom: 6, padding: '3px 8px', background: '#f9f0ff', borderRadius: 5, fontSize: 11, color: '#722ed1', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="23 7 16 12 23 17"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+                    {selectedShape.isInterpolated ? 'Interpolated — drag to create keyframe' : 'Keyframe'}
+                    <button onClick={() => {
+                      const updatedTracks = tracks.map(tr => { if (tr.id !== selectedShape.trackId) return tr; const kf = { ...tr.keyframes }; delete kf[String(frameNum)]; return { ...tr, keyframes: kf }; });
+                      setTracks(updatedTracks);
+                      deleteShape(selectedShapeId!);
+                      client.put(`/jobs/${jobId!}/tracks`, { tracks: updatedTracks }).catch(() => {});
+                    }} style={{ marginLeft: 'auto', fontSize: 10, color: '#ff4d4f', background: 'none', border: 'none', cursor: 'pointer' }}>remove kf</button>
+                  </div>
+                )}
                 {/* Quick flags */}
                 <div style={{ display: 'flex', gap: 6, marginBottom: attrDefs.length ? 8 : 4, flexWrap: 'wrap' }}>
                   {[

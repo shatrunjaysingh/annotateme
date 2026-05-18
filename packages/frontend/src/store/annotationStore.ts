@@ -15,6 +15,8 @@ export interface Shape {
   locked?: boolean;
   attributes?: Record<string, string | number | boolean>;
   confidence?: number;
+  trackId?: string;
+  isInterpolated?: boolean;
 }
 
 interface AnnotationState {
