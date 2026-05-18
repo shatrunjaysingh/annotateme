@@ -155,6 +155,9 @@ export default function ProjectDetail() {
   const [jobMenuId, setJobMenuId] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [uploadingTaskId, setUploadingTaskId] = useState<string | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFormat, setExportFormat] = useState<'coco' | 'yolo' | 'pascal_voc'>('coco');
+  const [exporting, setExporting] = useState(false);
 
   // Modals
   const [showCreateTask, setShowCreateTask] = useState(false);
@@ -361,14 +364,47 @@ export default function ProjectDetail() {
   };
 
   // ── Project actions ────────────────────────────────────────────────────
-  const handleProjectExport = async () => {
+  const handleOpenExportModal = () => { setActionsOpen(false); setShowExportModal(true); };
+
+  const handleExportForTraining = async () => {
+    setExporting(true);
+    try {
+      const res = await client.get(`/import-export/${id}/export?format=${exportFormat}&download=true`, { responseType: 'blob' });
+      const ext = exportFormat === 'pascal_voc' ? 'xml.json' : 'json';
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project?.name ?? 'project'}-${exportFormat}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setShowExportModal(false);
+      toast.success('Export downloaded', `${exportFormat.toUpperCase()} format ready.`);
+    } catch {
+      toast.error('Export failed', 'Could not export in this format.');
+    } finally { setExporting(false); }
+  };
+
+  const handleDownloadAnnotations = async () => {
     setActionsOpen(false);
     try {
-      const res = await client.get(`/import-export/export?projectId=${id}&format=json`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a'); a.href = url; a.download = `project-${project?.name}-export.json`; a.click();
+      const res = await client.get(`/import-export/${id}/annotations/export`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project?.name ?? 'project'}-annotations.json`;
+      a.click();
       URL.revokeObjectURL(url);
-    } catch { alert('Export failed.'); }
+      toast.success('Annotations downloaded');
+    } catch (err: any) {
+      // Parse error body from blob response
+      let msg = 'Could not export annotations.';
+      try {
+        const text = await err?.response?.data?.text?.();
+        const parsed = text ? JSON.parse(text) : null;
+        if (parsed?.error) msg = parsed.error;
+      } catch { /* ignore parse failure */ }
+      toast.error('Download failed', msg);
+    }
   };
 
   const handleProjectImport = () => { setActionsOpen(false); document.getElementById('proj-import-inp')?.click(); };
@@ -560,7 +596,8 @@ export default function ProjectDetail() {
             </button>
             {actionsOpen && (
               <DropMenu style={{ top: '100%', right: 0, marginTop: 6 }}>
-                <MI icon="↓" label="Export dataset" onClick={handleProjectExport} />
+                <MI icon="↓" label="Download annotations (JSON)" onClick={handleDownloadAnnotations} />
+                <MI icon="↓" label="Export for training…" onClick={handleOpenExportModal} />
                 <MI icon="↑" label="Import dataset" onClick={handleProjectImport} />
                 <MI icon="⊙" label="Backup project" onClick={handleProjectBackup} />
                 <MDivider />
@@ -784,6 +821,51 @@ export default function ProjectDetail() {
       </div>
 
       {/* ── Modals ── */}
+      {showExportModal && (
+        <Modal
+          title="Export for Training"
+          onClose={() => setShowExportModal(false)}
+          footer={
+            <>
+              <button className="btn btn-default" onClick={() => setShowExportModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleExportForTraining} disabled={exporting}>
+                {exporting ? <><span className="spinner spinner-sm" /> Exporting…</> : 'Download'}
+              </button>
+            </>
+          }>
+          <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+            Choose the format your ML framework expects. The file will download immediately.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {([
+              { value: 'coco',       label: 'COCO JSON',    desc: 'Detectron2, MMDetection, COCO API' },
+              { value: 'yolo',       label: 'YOLO',         desc: 'Ultralytics YOLOv5/v8, Darknet' },
+              { value: 'pascal_voc', label: 'Pascal VOC',   desc: 'Older pipelines, LabelImg' },
+            ] as const).map(opt => (
+              <label key={opt.value} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px',
+                borderRadius: 8, border: `2px solid ${exportFormat === opt.value ? '#2563eb' : '#e5e7eb'}`,
+                background: exportFormat === opt.value ? '#eff6ff' : '#fff',
+                cursor: 'pointer', transition: 'border-color 0.15s, background 0.15s',
+              }}>
+                <input
+                  type="radio"
+                  name="export-format"
+                  value={opt.value}
+                  checked={exportFormat === opt.value}
+                  onChange={() => setExportFormat(opt.value)}
+                  style={{ marginTop: 2, accentColor: '#2563eb' }}
+                />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#111827' }}>{opt.label}</div>
+                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{opt.desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </Modal>
+      )}
+
       {showCreateTask && (
         <Modal title="Create New Task" onClose={() => setShowCreateTask(false)}
           footer={<><button className="btn btn-default" onClick={() => setShowCreateTask(false)}>Cancel</button><button className="btn btn-primary" onClick={handleCreateTask} disabled={saving}>{saving ? <span className="spinner" /> : 'Create'}</button></>}>
@@ -1017,11 +1099,11 @@ function TaskCard({ task, taskIndex, users, expandedTaskId, setExpandedTaskId, t
 
         {/* Info */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
-            Task #{taskIndex + 1}
-            <span style={{ fontWeight: 400, color: '#8c8c8c', marginLeft: 8, fontSize: 12 }}>
-              Created by — on {new Date(task.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-            </span>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 2, color: '#262626' }}>
+            {task.name}
+          </div>
+          <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>
+            Task #{taskIndex + 1} · Created {new Date(task.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
           </div>
 
           {/* Assignee */}

@@ -167,7 +167,7 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
       method: "POST",
       body: form,
       headers: form.getHeaders(),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(300_000), // 5 min — SAM2/Grounded SAM download weights on first use
     });
 
     if (!aiResp.ok) {
@@ -217,8 +217,8 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
       note: aiData.note ?? null,
     });
   } catch (err: any) {
-    if (err.name === "TimeoutError") {
-      res.status(504).json({ error: "AI service timed out" });
+    if (err.name === "TimeoutError" || err.name === "AbortError" || err.type === "aborted") {
+      res.status(504).json({ error: "AI service timed out. Heavy models (SAM2, Grounded SAM) may take 1–3 minutes on first use while downloading weights. Please try again." });
       return;
     }
     console.error("AI annotate error:", err);

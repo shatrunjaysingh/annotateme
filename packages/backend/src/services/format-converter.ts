@@ -209,7 +209,11 @@ export class FormatConverter {
   }
 
   // Convert Unified to COCO
-  static unifiedToCOCO(annotations: UnifiedAnnotation[], projectName: string = "project"): COCODataset {
+  static unifiedToCOCO(
+    annotations: UnifiedAnnotation[],
+    projectName: string = "project",
+    imageDimensions?: Record<string, { width: number; height: number }>,
+  ): COCODataset {
     const images: COCOImage[] = [];
     const cocoAnnotations: COCOAnnotation[] = [];
     const categories: COCOCategory[] = [];
@@ -224,11 +228,15 @@ export class FormatConverter {
       // Add image if not exists
       if (!fileMap.has(ann.fileId)) {
         fileMap.set(ann.fileId, imageId);
+        const dims = imageDimensions?.[ann.fileId] ??
+          (ann.data.metadata?.imageWidth
+            ? { width: ann.data.metadata.imageWidth as number, height: ann.data.metadata.imageHeight as number }
+            : { width: 0, height: 0 });
         images.push({
           id: imageId,
           file_name: ann.fileId,
-          height: 1000,
-          width: 1000,
+          height: dims.height,
+          width: dims.width,
         });
         imageId++;
       }
@@ -246,14 +254,38 @@ export class FormatConverter {
             categoryId++;
           }
 
+          const catId = categoryMap.get(obj.class)!;
+          const imgId = fileMap.get(ann.fileId)!;
+
           if (obj.bbox) {
+            const area = obj.bbox.width * obj.bbox.height;
+            const cocoAnn: COCOAnnotation = {
+              id: annotationId++,
+              image_id: imgId,
+              category_id: catId,
+              bbox: [obj.bbox.x, obj.bbox.y, obj.bbox.width, obj.bbox.height],
+              area,
+              iscrowd: 0,
+            };
+            // Include polygon segmentation when available
+            if (obj.coordinates && obj.coordinates.length >= 3) {
+              cocoAnn.segmentation = [obj.coordinates.flatMap(p => [p.x, p.y])];
+            }
+            cocoAnnotations.push(cocoAnn);
+          } else if (obj.coordinates && obj.coordinates.length >= 3) {
+            // Polygon-only shape — derive bbox from bounding rect of polygon
+            const xs = obj.coordinates.map(p => p.x);
+            const ys = obj.coordinates.map(p => p.y);
+            const x = Math.min(...xs), y = Math.min(...ys);
+            const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
             cocoAnnotations.push({
               id: annotationId++,
-              image_id: fileMap.get(ann.fileId)!,
-              category_id: categoryMap.get(obj.class)!,
-              bbox: [obj.bbox.x, obj.bbox.y, obj.bbox.width, obj.bbox.height],
-              area: obj.bbox.width * obj.bbox.height,
+              image_id: imgId,
+              category_id: catId,
+              bbox: [x, y, w, h],
+              area: w * h,
               iscrowd: 0,
+              segmentation: [obj.coordinates.flatMap(p => [p.x, p.y])],
             });
           }
         });
@@ -274,15 +306,22 @@ export class FormatConverter {
   }
 
   // Convert Unified to Pascal VOC
-  static unifiedToPascalVOC(annotations: UnifiedAnnotation[]): PascalVOCAnnotation[] {
+  static unifiedToPascalVOC(
+    annotations: UnifiedAnnotation[],
+    imageDimensions?: Record<string, { width: number; height: number }>,
+  ): PascalVOCAnnotation[] {
     const fileMap = new Map<string, PascalVOCAnnotation>();
 
     annotations.forEach((ann) => {
       if (!fileMap.has(ann.fileId)) {
+        const dims = imageDimensions?.[ann.fileId] ??
+          (ann.data.metadata?.imageWidth
+            ? { width: ann.data.metadata.imageWidth as number, height: ann.data.metadata.imageHeight as number }
+            : { width: 0, height: 0 });
         fileMap.set(ann.fileId, {
           filename: ann.fileId,
-          width: 1000,
-          height: 1000,
+          width: dims.width,
+          height: dims.height,
           depth: 3,
           objects: [],
         });
@@ -312,11 +351,32 @@ export class FormatConverter {
   }
 
   // Convert Unified to YOLO
-  static unifiedToYOLO(annotations: UnifiedAnnotation[]): { annotations: YOLOAnnotation[]; classNames: string[] } {
-    const classSet = new Set<string>();
+  static unifiedToYOLO(
+    annotations: UnifiedAnnotation[],
+    imageDimensions?: Record<string, { width: number; height: number }>,
+  ): { annotations: YOLOAnnotation[]; classNames: string[] } {
+    // Build stable class list in a first pass so class_id never shifts mid-iteration
+    const classNames: string[] = [];
+    const classIndex = new Map<string, number>();
+    for (const ann of annotations) {
+      for (const obj of ann.data.objects ?? []) {
+        if (!classIndex.has(obj.class)) {
+          classIndex.set(obj.class, classNames.length);
+          classNames.push(obj.class);
+        }
+      }
+    }
+
     const yoloAnnotations: YOLOAnnotation[] = [];
 
     annotations.forEach((ann) => {
+      const dims = imageDimensions?.[ann.fileId] ??
+        (ann.data.metadata?.imageWidth
+          ? { width: ann.data.metadata.imageWidth as number, height: ann.data.metadata.imageHeight as number }
+          : { width: 1, height: 1 });
+      const imgW = dims.width || 1;
+      const imgH = dims.height || 1;
+
       const yoloAnn: YOLOAnnotation = {
         image_path: ann.fileId,
         annotations: [],
@@ -324,15 +384,13 @@ export class FormatConverter {
 
       if (ann.data.objects) {
         ann.data.objects.forEach((obj) => {
-          classSet.add(obj.class);
-
           if (obj.bbox) {
             yoloAnn.annotations.push({
-              class_id: Array.from(classSet).indexOf(obj.class),
-              x_center: obj.normalized ? obj.bbox.x : obj.bbox.x / 1000,
-              y_center: obj.normalized ? obj.bbox.y : obj.bbox.y / 1000,
-              width: obj.normalized ? obj.bbox.width : obj.bbox.width / 1000,
-              height: obj.normalized ? obj.bbox.height : obj.bbox.height / 1000,
+              class_id: classIndex.get(obj.class)!,
+              x_center: obj.normalized ? obj.bbox.x : obj.bbox.x / imgW,
+              y_center: obj.normalized ? obj.bbox.y : obj.bbox.y / imgH,
+              width: obj.normalized ? obj.bbox.width : obj.bbox.width / imgW,
+              height: obj.normalized ? obj.bbox.height : obj.bbox.height / imgH,
             });
           }
         });
@@ -343,64 +401,80 @@ export class FormatConverter {
       }
     });
 
-    return {
-      annotations: yoloAnnotations,
-      classNames: Array.from(classSet),
-    };
+    return { annotations: yoloAnnotations, classNames };
   }
 
   // Validate dataset format
-  static validateCOCO(data: any): boolean {
-    return (
-      data.info &&
-      Array.isArray(data.images) &&
-      Array.isArray(data.annotations) &&
-      Array.isArray(data.categories)
-    );
+  static validateCOCO(data: any): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    if (!data.info) errors.push("Missing 'info' field");
+    if (!Array.isArray(data.images)) errors.push("'images' must be an array");
+    if (!Array.isArray(data.annotations)) errors.push("'annotations' must be an array");
+    if (!Array.isArray(data.categories)) errors.push("'categories' must be an array");
+
+    if (errors.length === 0) {
+      const imageIds = new Set(data.images.map((img: any) => img.id));
+      const catIds = new Set(data.categories.map((c: any) => c.id));
+      for (const ann of data.annotations) {
+        if (!imageIds.has(ann.image_id)) errors.push(`Annotation ${ann.id} references unknown image_id ${ann.image_id}`);
+        if (!catIds.has(ann.category_id)) errors.push(`Annotation ${ann.id} references unknown category_id ${ann.category_id}`);
+        if (Array.isArray(ann.bbox) && ann.bbox.length === 4) {
+          if (ann.bbox[2] <= 0 || ann.bbox[3] <= 0) errors.push(`Annotation ${ann.id} has non-positive bbox width/height`);
+        }
+      }
+    }
+    return { valid: errors.length === 0, errors };
   }
 
-  static validateYOLO(data: any): boolean {
-    return (
-      Array.isArray(data) &&
-      data.every(
-        (item) =>
-          item.image_path &&
-          Array.isArray(item.annotations) &&
-          item.annotations.every(
-            (ann) =>
-              typeof ann.class_id === "number" &&
-              typeof ann.x_center === "number" &&
-              typeof ann.y_center === "number"
-          )
-      )
-    );
+  static validateYOLO(data: any): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    if (!Array.isArray(data)) { return { valid: false, errors: ["Data must be an array"] }; }
+    data.forEach((item, i) => {
+      if (!item.image_path) errors.push(`Item ${i}: missing image_path`);
+      if (!Array.isArray(item.annotations)) { errors.push(`Item ${i}: annotations must be an array`); return; }
+      item.annotations.forEach((ann: any, j: number) => {
+        if (typeof ann.class_id !== "number") errors.push(`Item ${i} ann ${j}: class_id must be a number`);
+        const coords = [ann.x_center, ann.y_center, ann.width, ann.height];
+        if (coords.some((v: any) => typeof v !== "number")) errors.push(`Item ${i} ann ${j}: coordinate fields must be numbers`);
+        if (coords.some((v: number) => v < 0 || v > 1)) errors.push(`Item ${i} ann ${j}: coordinates must be normalised [0, 1]`);
+      });
+    });
+    return { valid: errors.length === 0, errors };
   }
 
-  static validatePascalVOC(data: any): boolean {
-    return (
-      Array.isArray(data) &&
-      data.every(
-        (item) =>
-          item.filename &&
-          item.objects &&
-          Array.isArray(item.objects) &&
-          item.objects.every((obj) => obj.bndbox && obj.name)
-      )
-    );
+  static validatePascalVOC(data: any): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    if (!Array.isArray(data)) { return { valid: false, errors: ["Data must be an array"] }; }
+    data.forEach((item, i) => {
+      if (!item.filename) errors.push(`Item ${i}: missing filename`);
+      if (!Array.isArray(item.objects)) { errors.push(`Item ${i}: objects must be an array`); return; }
+      item.objects.forEach((obj: any, j: number) => {
+        if (!obj.name) errors.push(`Item ${i} obj ${j}: missing name`);
+        if (!obj.bndbox) { errors.push(`Item ${i} obj ${j}: missing bndbox`); return; }
+        const { xmin, ymin, xmax, ymax } = obj.bndbox;
+        if (xmax <= xmin) errors.push(`Item ${i} obj ${j}: xmax (${xmax}) must be > xmin (${xmin})`);
+        if (ymax <= ymin) errors.push(`Item ${i} obj ${j}: ymax (${ymax}) must be > ymin (${ymin})`);
+      });
+    });
+    return { valid: errors.length === 0, errors };
   }
+
+  // Legacy boolean shims — keep for callers that only check truthiness
+  static validateCOCOBool(data: any): boolean { return this.validateCOCO(data).valid; }
+  static validateYOLOBool(data: any): boolean { return this.validateYOLO(data).valid; }
+  static validatePascalVOCBool(data: any): boolean { return this.validatePascalVOC(data).valid; }
 
   // Detect format from file content
   static detectFormat(content: string): "coco" | "yolo" | "pascal_voc" | "csv" | "json" | null {
     try {
       const data = JSON.parse(content);
 
-      if (this.validateCOCO(data)) return "coco";
-      if (this.validateYOLO(data)) return "yolo";
-      if (this.validatePascalVOC(data)) return "pascal_voc";
+      if (this.validateCOCO(data).valid) return "coco";
+      if (this.validateYOLO(data).valid) return "yolo";
+      if (this.validatePascalVOC(data).valid) return "pascal_voc";
 
       return "json";
     } catch {
-      // Might be CSV
       if (content.includes(",") && content.includes("\n")) {
         return "csv";
       }

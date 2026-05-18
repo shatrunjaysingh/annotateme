@@ -26,7 +26,7 @@ if not hasattr(_torch.compiler, "is_compiling"):
     _torch.compiler.is_compiling = lambda: False
 
 from model import (
-    BaseAnnotationModel, GroundedSAMModel, MockModel, Prediction,
+    BaseAnnotationModel, GroundedSAMModel, KITTIModel, MockModel, Prediction,
     ProductionModel, SAM2Model, YOLOWorldModel, active_model,
 )
 
@@ -83,6 +83,8 @@ def _get_model(name: str, classes: list[str] | None = None) -> BaseAnnotationMod
             elif name == "grounded-sam":
                 inst = GroundedSAMModel(classes=classes)
                 _registry[name] = inst
+            elif name == "kitti":
+                _registry[name] = KITTIModel()
             elif name == "custom":
                 if not os.path.exists(CUSTOM_WEIGHTS):
                     raise FileNotFoundError(
@@ -93,7 +95,7 @@ def _get_model(name: str, classes: list[str] | None = None) -> BaseAnnotationMod
             else:
                 raise ValueError(
                     f"Unknown model '{name}'. Valid: mock, production, yolo-world, sam2, "
-                    "grounded-sam, custom, active"
+                    "grounded-sam, kitti, custom, active"
                 )
         elif name == "grounded-sam" and classes:
             _registry[name].set_classes(classes)  # type: ignore[attr-defined]
@@ -158,6 +160,8 @@ def list_models():
                 "bestFor": "Testing the annotation UI pipeline",
                 "domains": "Any image",
                 "supportsClasses": False,
+                "defaultConfidence": 0.15,
+                "minConfidence": 0.01,
             },
             {
                 "id": "production",
@@ -174,6 +178,8 @@ def list_models():
                 "bestFor": "Real photographs with everyday objects",
                 "domains": "Street scenes, indoor, animals, vehicles",
                 "supportsClasses": False,
+                "defaultConfidence": 0.25,
+                "minConfidence": 0.01,
             },
             {
                 "id": "yolo-world",
@@ -190,6 +196,8 @@ def list_models():
                 "bestFor": "Custom classes on real-photo datasets",
                 "domains": "Any real photographs with custom labels",
                 "supportsClasses": True,
+                "defaultConfidence": 0.01,
+                "minConfidence": 0.01,
             },
             {
                 "id": "custom",
@@ -206,6 +214,8 @@ def list_models():
                 "bestFor": "Your specific domain and custom labels",
                 "domains": "Whatever you trained it on",
                 "supportsClasses": False,
+                "defaultConfidence": 0.25,
+                "minConfidence": 0.01,
             },
             {
                 "id": "sam2",
@@ -223,6 +233,8 @@ def list_models():
                 "bestFor": "Any domain where you want to segment everything automatically",
                 "domains": "Any image, any domain, no prompts needed",
                 "supportsClasses": False,
+                "defaultConfidence": 0.50,
+                "minConfidence": 0.01,
             },
             {
                 "id": "grounded-sam",
@@ -240,6 +252,27 @@ def list_models():
                 "bestFor": "Highest quality automatic annotation with custom label names",
                 "domains": "Any image, any label, any domain",
                 "supportsClasses": True,
+                "defaultConfidence": 0.30,
+                "minConfidence": 0.01,
+            },
+            {
+                "id": "kitti",
+                "name": "KITTI Detection",
+                "integrated": True,
+                "badge": "AUTONOMOUS DRIVING",
+                "badgeColor": "orange",
+                "tagline": "KITTI labels on driving scenes — no extra download needed",
+                "description": (
+                    "YOLOv8s with COCO→KITTI label remapping. Filters detections to driving-scene "
+                    "classes and renames them to KITTI conventions: Car, Van, Truck, Pedestrian, "
+                    "Cyclist, Tram. Reuses the same weights as YOLOv8-seg — no additional download. "
+                    "Works offline once the base model is cached."
+                ),
+                "bestFor": "Autonomous driving scenes, dashcam footage, street photography",
+                "domains": "Driving scenes, street-level imagery, dashcam footage",
+                "supportsClasses": False,
+                "defaultConfidence": 0.25,
+                "minConfidence": 0.01,
             },
         ],
     }

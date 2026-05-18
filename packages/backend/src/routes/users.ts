@@ -1,4 +1,5 @@
 import { Router } from "express";
+import bcrypt from "bcryptjs";
 import { AppDataSource } from "../database/data-source";
 import { User } from "../entities/User";
 import { authMiddleware, roleMiddleware, AuthRequest } from "../middlewares/auth";
@@ -45,12 +46,16 @@ router.patch("/:id", async (req: AuthRequest, res) => {
     const user = await userRepo.findOne({ where: { id: req.params.id } });
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    const { username, firstName, lastName, role, isActive } = req.body;
+    const { username, firstName, lastName, role, isActive, password } = req.body;
     if (username !== undefined) user.username = username;
     if (firstName !== undefined) user.firstName = firstName;
     if (lastName !== undefined) user.lastName = lastName;
     if (role !== undefined && req.user!.role === "admin") user.role = role;
     if (isActive !== undefined && req.user!.role === "admin") user.isActive = isActive;
+    if (password) {
+      if (password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
+      user.password = await bcrypt.hash(password, 10);
+    }
 
     await userRepo.save(user);
     res.json({ id: user.id, email: user.email, username: user.username, role: user.role, isActive: user.isActive });

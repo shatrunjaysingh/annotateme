@@ -644,6 +644,94 @@ class GroundedSAMModel(BaseAnnotationModel):
         return preds
 
 
+class KITTIModel(BaseAnnotationModel):
+    """
+    KITTI-domain object detection using YOLOv8s with COCO→KITTI label remapping.
+
+    Instead of a separate fine-tuned checkpoint (which require private HF auth),
+    this reuses the same YOLOv8s-seg weights as ProductionModel — already cached
+    locally — and filters detections to the COCO classes that map cleanly onto
+    KITTI categories:
+
+        COCO class       → KITTI label
+        ─────────────────────────────
+        person           → Pedestrian
+        bicycle          → Cyclist
+        motorcycle       → Cyclist
+        car              → Car
+        bus              → Van
+        truck            → Truck
+        train            → Tram
+
+    No extra download is required. Works offline once YOLOv8s-seg.pt is cached.
+
+    Parameters
+    ----------
+    conf : float
+        Minimum detection confidence (default 0.25).
+    iou : float
+        NMS IoU threshold (default 0.45).
+    device : str | None
+        Inference device: "cpu", "cuda", "mps", or None for auto.
+    """
+
+    # COCO label → KITTI label (non-listed COCO classes are dropped)
+    _COCO_TO_KITTI: dict[str, str] = {
+        "person":     "Pedestrian",
+        "bicycle":    "Cyclist",
+        "motorcycle": "Cyclist",
+        "car":        "Car",
+        "bus":        "Van",
+        "truck":      "Truck",
+        "train":      "Tram",
+    }
+
+    def __init__(
+        self,
+        conf: float = 0.25,
+        iou: float = 0.45,
+        device: str | None = None,
+    ) -> None:
+        try:
+            from ultralytics import YOLO  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "ultralytics is not installed. Run: pip install ultralytics"
+            ) from exc
+
+        # Reuse the same weights already pulled by ProductionModel — no extra download.
+        self._model  = YOLO("yolov8s-seg.pt")
+        self._conf   = conf
+        self._iou    = iou
+        self._device = device
+
+    def predict(self, image: Image.Image) -> list[Prediction]:
+        results = self._model.predict(
+            source=image,
+            conf=self._conf,
+            iou=self._iou,
+            verbose=False,
+            device=self._device,
+        )
+        result = results[0]
+        names: dict[int, str] = result.names
+        out: list[Prediction] = []
+        for box in result.boxes:
+            coco_label  = names[int(box.cls[0])]
+            kitti_label = self._COCO_TO_KITTI.get(coco_label)
+            if kitti_label is None:
+                continue  # drop non-driving-scene classes
+            conf = round(float(box.conf[0]), 4)
+            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+            out.append({
+                "type":       "rect",
+                "label":      kitti_label,
+                "confidence": conf,
+                "points":     [{"x": x1, "y": y1}, {"x": x2, "y": y2}],
+            })
+        return out
+
+
 class CustomModel(BaseAnnotationModel):
     """
     Template for a fully custom model.

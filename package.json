@@ -8,7 +8,17 @@
     "packages/frontend",
     "packages/e2e"
   ],
+  "scripts": {
+    "predev": "node -e \"const {execSync}=require('child_process');[3000,4200,8000].forEach(p=>{try{execSync('lsof -ti:'+p+' | xargs kill -9',{stdio:'ignore'})}catch{}});\"",
+    "dev": "concurrently --kill-others-on-fail --names \"backend,frontend,ai\" --prefix-colors \"blue,green,magenta\" \"npm run dev --workspace=packages/backend\" \"npm run dev --workspace=packages/frontend\" \"npm run ai:dev\"",
+    "ai:dev": "cd packages/ai && python3.10 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
+    "build": "npm run build --workspace=packages/backend && npm run build --workspace=packages/frontend",
+    "prestart": "node -e \"const {execSync}=require('child_process');[3000,4200,8000].forEach(p=>{try{execSync('lsof -ti:'+p+' | xargs kill -9',{stdio:'ignore'})}catch{}});\"",
+    "start": "concurrently --kill-others-on-fail --names \"backend,frontend,ai\" --prefix-colors \"blue,green,magenta\" \"npm run start --workspace=packages/backend\" \"npm run preview --workspace=packages/frontend\" \"npm run ai:start\"",
+    "ai:start": "cd packages/ai && python3.10 -m uvicorn main:app --host 0.0.0.0 --port 8000"
+  },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "typescript": "^5.1.3"
   }
 }

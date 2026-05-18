@@ -420,9 +420,9 @@ function detectBasicFormat(content: string): string | null {
   try {
     const data = JSON.parse(content);
 
-    if (FormatConverter.validateCOCO(data)) return "coco";
-    if (FormatConverter.validateYOLO(data)) return "yolo";
-    if (FormatConverter.validatePascalVOC(data)) return "pascal_voc";
+    if (FormatConverter.validateCOCO(data).valid) return "coco";
+    if (FormatConverter.validateYOLO(data).valid) return "yolo";
+    if (FormatConverter.validatePascalVOC(data).valid) return "pascal_voc";
 
     return "json";
   } catch {

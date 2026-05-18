@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import client from '../api/client';
 import Navbar from '../components/Navbar';
+import { useAuthStore } from '../store/authStore';
 
 interface Job {
   id: string;
@@ -14,6 +15,7 @@ interface Job {
   shapeCount: number;
   lastAnnotatedAt: string | null;
   assignee: string | null;
+  assigneeId: string | null;
 }
 
 interface Task {
@@ -374,6 +376,8 @@ function TenantNode({ tenant, navigate }: { tenant: Tenant; navigate: ReturnType
 
 export default function Annotations() {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === 'admin' || user?.role === 'manager';
   const [tree, setTree] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -399,6 +403,7 @@ export default function Annotations() {
       tasks: project.tasks.map(task => ({
         ...task,
         jobs: task.jobs.filter(j => {
+          if (!isAdmin && j.assigneeId !== user?.id) return false;
           if (filterStage && j.stage !== filterStage) return false;
           if (filterState && j.state !== filterState) return false;
           if (q && !project.name.toLowerCase().includes(q) && !task.name.toLowerCase().includes(q)) return false;

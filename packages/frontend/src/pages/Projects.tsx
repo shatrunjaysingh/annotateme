@@ -84,7 +84,7 @@ function SkeletonCard() {
 
 export default function Projects() {
   const navigate = useNavigate();
-  const { activeTenant } = useTenantStore();
+  const { activeTenant, tenants, setTenants } = useTenantStore();
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -99,8 +99,12 @@ export default function Projects() {
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', description: '', dataType: 'image', labelSet: '' });
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const [form, setForm] = useState({ name: '', description: '', dataType: 'image', labelSet: '', organizationId: '' });
   const [saving, setSaving] = useState(false);
+  const [exportTarget, setExportTarget] = useState<{ id: string; name: string } | null>(null);
+  const [exportFormat, setExportFormat] = useState<'coco' | 'yolo' | 'pascal_voc'>('coco');
+  const [exporting, setExporting] = useState(false);
   const [page, setPage] = useState(1);
   const importRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const PER_PAGE = 12;
@@ -117,16 +121,38 @@ export default function Projects() {
 
   useEffect(() => { load(); }, [load, activeTenant]);
 
+  // Ensure tenants are loaded for the create-project dropdown
+  useEffect(() => {
+    if (tenants.length > 0) return;
+    client.get('/tenants')
+      .then(({ data }) => { if (Array.isArray(data)) setTenants(data.map((t: { id: string; name: string }) => ({ id: t.id, name: t.name }))); })
+      .catch(() => {});
+  }, [tenants.length, setTenants]);
+
+  const closeMenu = () => { setOpenMenuId(null); setMenuPos(null); };
+  const openMenu = (e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation();
+    if (openMenuId === projectId) { closeMenu(); return; }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    setOpenMenuId(projectId);
+  };
+
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest('.project-menu')) setOpenMenuId(null);
+      if (!(e.target as HTMLElement).closest('.project-menu')) closeMenu();
       if (!(e.target as HTMLElement).closest('.sort-menu')) setShowSortMenu(false);
       if (!(e.target as HTMLElement).closest('.type-menu')) setShowTypeMenu(false);
       if (!(e.target as HTMLElement).closest('.status-menu')) setShowStatusMenu(false);
     };
+    const onScroll = () => closeMenu();
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [openMenuId]);
 
   const applyFiltersAndSort = (list: Project[]) => {
     let result = [...list];
@@ -158,10 +184,10 @@ export default function Projects() {
         description: form.description,
         dataType: form.dataType,
         labelSet: labels,
-        organizationId: activeTenant?.id,
+        organizationId: form.organizationId || undefined,
       });
       setShowCreate(false);
-      setForm({ name: '', description: '', dataType: 'image', labelSet: '' });
+      setForm({ name: '', description: '', dataType: 'image', labelSet: '', organizationId: '' });
       toast.success('Project created', `"${form.name.trim()}" is ready.`);
       load();
     } catch {
@@ -170,7 +196,7 @@ export default function Projects() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    setOpenMenuId(null);
+    closeMenu();
     const ok = await confirm({
       title: 'Delete project?',
       message: `"${name}" and all its tasks, jobs, and annotations will be permanently deleted. This cannot be undone.`,
@@ -189,7 +215,7 @@ export default function Projects() {
   };
 
   const handleChangeStatus = async (id: string, status: string) => {
-    setOpenMenuId(null);
+    closeMenu();
     try {
       await client.patch(`/projects/${id}`, { status });
       setProjects(ps => ps.map(p => p.id === id ? { ...p, status } : p));
@@ -199,20 +225,50 @@ export default function Projects() {
     }
   };
 
-  const handleExportDataset = async (id: string, name: string) => {
-    setOpenMenuId(null);
+  const handleDownloadAnnotations = async (id: string, name: string) => {
+    closeMenu();
     try {
-      const res = await client.get(`/import-export/${id}/export?format=json&download=true`, { responseType: 'blob' });
+      const res = await client.get(`/import-export/${id}/annotations/export`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/json' }));
-      const a = document.createElement('a'); a.href = url; a.download = `project-${name}-dataset.json`; a.click();
+      const a = document.createElement('a'); a.href = url; a.download = `${name}-annotations.json`; a.click();
       URL.revokeObjectURL(url);
-      toast.success('Export started', 'Dataset download has begun.');
-    } catch {
-      toast.error('Export failed', 'Could not export the dataset.');
+      toast.success('Annotations downloaded');
+    } catch (err: any) {
+      let msg = 'Could not export annotations.';
+      try {
+        const text = await err?.response?.data?.text?.();
+        const parsed = text ? JSON.parse(text) : null;
+        if (parsed?.error) msg = parsed.error;
+      } catch { /* ignore */ }
+      toast.error('Download failed', msg);
     }
   };
 
-  const handleImportDataset = (id: string) => { setOpenMenuId(null); importRefs.current[id]?.click(); };
+  const handleOpenExportModal = (id: string, name: string) => {
+    closeMenu();
+    setExportFormat('coco');
+    setExportTarget({ id, name });
+  };
+
+  const handleExportForTraining = async () => {
+    if (!exportTarget) return;
+    setExporting(true);
+    try {
+      const res = await client.get(`/import-export/${exportTarget.id}/export?format=${exportFormat}&download=true`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${exportTarget.name}-${exportFormat}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExportTarget(null);
+      toast.success('Export downloaded', `${exportFormat.toUpperCase()} format ready.`);
+    } catch {
+      toast.error('Export failed', 'Could not export in this format.');
+    } finally { setExporting(false); }
+  };
+
+  const handleImportDataset = (id: string) => { closeMenu(); importRefs.current[id]?.click(); };
 
   const handleImportFile = async (id: string, files: FileList | null) => {
     if (!files?.length) return;
@@ -227,7 +283,7 @@ export default function Projects() {
   };
 
   const handleBackup = async (id: string, name: string) => {
-    setOpenMenuId(null);
+    closeMenu();
     try {
       const [projRes, tasksRes] = await Promise.all([client.get(`/projects/${id}`), client.get(`/tasks?projectId=${id}`)]);
       const backup = { project: projRes.data, tasks: tasksRes.data, exportedAt: new Date().toISOString() };
@@ -252,7 +308,7 @@ export default function Projects() {
           <h1>Projects</h1>
           {!loading && <p>{filtered.length} project{filtered.length !== 1 ? 's' : ''}{statusFilter || typeFilter || search ? ' matching filters' : ''}</p>}
         </div>
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+        <button className="btn btn-primary" onClick={() => { setForm(f => ({ ...f, organizationId: activeTenant?.id || '' })); setShowCreate(true); }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New Project
         </button>
@@ -380,7 +436,7 @@ export default function Projects() {
                 </button>
               )}
               {!search && !statusFilter && !typeFilter && (
-                <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+                <button className="btn btn-primary" onClick={() => { setForm(f => ({ ...f, organizationId: activeTenant?.id || '' })); setShowCreate(true); }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   Create Project
                 </button>
@@ -395,51 +451,35 @@ export default function Projects() {
               const progressClass = pct >= 100 ? 'success' : pct >= 50 ? '' : '';
               return (
                 <div key={p.id} className="card card-hover project-menu"
-                  style={{ cursor: 'pointer', overflow: 'hidden', position: 'relative', zIndex: openMenuId === p.id ? 500 : 1 }}
+                  style={{ cursor: 'pointer', overflow: 'hidden', position: 'relative' }}
                   onClick={() => navigate(`/projects/${p.id}`)}>
 
                   <input ref={el => importRefs.current[p.id] = el} type="file" accept=".json" style={{ display: 'none' }}
                     onChange={e => handleImportFile(p.id, e.target.files)} />
 
                   {/* Thumbnail */}
-                  <div style={{ height: 128, background: THUMBNAIL_GRADIENTS[i % THUMBNAIL_GRADIENTS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ height: 128, background: THUMBNAIL_GRADIENTS[i % THUMBNAIL_GRADIENTS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden', borderRadius: '12px 12px 0 0' }}>
                     {p.tasks?.[0]?.thumbnailUrl ? (
                       <img src={p.tasks[0].thumbnailUrl} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     ) : (
                       <div style={{ color: 'rgba(255,255,255,0.35)' }}>{TYPE_ICONS[p.dataType] || TYPE_ICONS.image}</div>
                     )}
-
-                    {/* Top overlay: status + menu */}
-                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: 10 }}>
+                    {/* Status badge only — menu button moved outside overflow:hidden */}
+                    <div style={{ position: 'absolute', top: 10, left: 10 }}>
                       <span style={{ padding: '3px 9px', borderRadius: 20, background: 'rgba(0,0,0,0.45)', color: '#fff', fontSize: 11, fontWeight: 600, backdropFilter: 'blur(4px)', letterSpacing: 0.3 }}>
                         {statusCfg.label}
                       </span>
-
-                      <div onClick={e => e.stopPropagation()}>
-                        <button
-                          style={{ width: 28, height: 28, borderRadius: 6, border: 'none', background: 'rgba(0,0,0,0.45)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
-                          onClick={() => setOpenMenuId(openMenuId === p.id ? null : p.id)}
-                          aria-label="Project options">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-                        </button>
-
-                        {openMenuId === p.id && (
-                          <div style={{ position: 'absolute', top: 40, right: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', minWidth: 200, zIndex: 1000, overflow: 'hidden' }}>
-                            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>} label="Open project" onClick={() => { navigate(`/projects/${p.id}`); setOpenMenuId(null); }} />
-                            <div className="dropdown-divider" />
-                            <CardSubMenuItem label="Set status" items={Object.entries(STATUS_CONFIG).map(([val, cfg]) => ({ label: cfg.label, active: (p.status || 'in_progress') === val, onClick: () => handleChangeStatus(p.id, val) }))} />
-                            <div className="dropdown-divider" />
-                            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Export dataset" onClick={() => handleExportDataset(p.id, p.name)} />
-                            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>} label="Import dataset" onClick={() => handleImportDataset(p.id)} />
-                            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>} label="Backup project" onClick={() => handleBackup(p.id, p.name)} />
-                            <div className="dropdown-divider" />
-                            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>} label="View analytics" onClick={() => { navigate('/analytics'); setOpenMenuId(null); }} />
-                            <div className="dropdown-divider" />
-                            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>} label="Delete project" onClick={() => handleDelete(p.id, p.name)} danger />
-                          </div>
-                        )}
-                      </div>
                     </div>
+                  </div>
+
+                  {/* Three-dot button — outside thumbnail so no overflow/transform clipping */}
+                  <div className="project-menu" style={{ position: 'absolute', top: 10, right: 10, zIndex: 10 }} onClick={e => e.stopPropagation()}>
+                    <button
+                      style={{ width: 28, height: 28, borderRadius: 6, border: 'none', background: 'rgba(0,0,0,0.45)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+                      onClick={e => openMenu(e, p.id)}
+                      aria-label="Project options">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                    </button>
                   </div>
 
                   {/* Card body */}
@@ -492,14 +532,82 @@ export default function Projects() {
         )}
       </div>
 
+      {/* Fixed-position project menu — outside all card stacking contexts */}
+      {openMenuId && menuPos && (() => {
+        const p = projects.find(proj => proj.id === openMenuId);
+        if (!p) return null;
+        return (
+          <div className="project-menu" style={{ position: 'fixed', top: menuPos.top, right: menuPos.right, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', minWidth: 210, zIndex: 9999, overflow: 'hidden' }}>
+            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>} label="Open project" onClick={() => { navigate(`/projects/${p.id}`); closeMenu(); }} />
+            <div className="dropdown-divider" />
+            <CardSubMenuItem label="Set status" items={Object.entries(STATUS_CONFIG).map(([val, cfg]) => ({ label: cfg.label, active: (p.status || 'in_progress') === val, onClick: () => handleChangeStatus(p.id, val) }))} />
+            <div className="dropdown-divider" />
+            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Download annotations" onClick={() => handleDownloadAnnotations(p.id, p.name)} />
+            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>} label="Export for training…" onClick={() => handleOpenExportModal(p.id, p.name)} />
+            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>} label="Import dataset" onClick={() => handleImportDataset(p.id)} />
+            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>} label="Backup project" onClick={() => handleBackup(p.id, p.name)} />
+            <div className="dropdown-divider" />
+            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>} label="View analytics" onClick={() => { navigate('/analytics'); closeMenu(); }} />
+            <div className="dropdown-divider" />
+            <CardMenuItem icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>} label="Delete project" onClick={() => handleDelete(p.id, p.name)} danger />
+          </div>
+        );
+      })()}
+
+      {/* Export for Training Modal */}
+      {exportTarget && (
+        <Modal
+          title="Export for Training"
+          onClose={() => setExportTarget(null)}
+          footer={
+            <>
+              <button className="btn btn-default" onClick={() => setExportTarget(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleExportForTraining} disabled={exporting}>
+                {exporting ? <><span className="spinner spinner-sm" /> Exporting…</> : 'Download'}
+              </button>
+            </>
+          }>
+          <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+            Choose the format your ML framework expects. The file will download immediately.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {([
+              { value: 'coco',       label: 'COCO JSON',  desc: 'Detectron2, MMDetection, COCO API' },
+              { value: 'yolo',       label: 'YOLO',       desc: 'Ultralytics YOLOv5/v8, Darknet' },
+              { value: 'pascal_voc', label: 'Pascal VOC', desc: 'Older pipelines, LabelImg' },
+            ] as const).map(opt => (
+              <label key={opt.value} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px',
+                borderRadius: 8, border: `2px solid ${exportFormat === opt.value ? '#2563eb' : '#e5e7eb'}`,
+                background: exportFormat === opt.value ? '#eff6ff' : '#fff',
+                cursor: 'pointer', transition: 'border-color 0.15s, background 0.15s',
+              }}>
+                <input
+                  type="radio"
+                  name="export-format"
+                  value={opt.value}
+                  checked={exportFormat === opt.value}
+                  onChange={() => setExportFormat(opt.value)}
+                  style={{ marginTop: 2, accentColor: '#2563eb' }}
+                />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#111827' }}>{opt.label}</div>
+                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{opt.desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </Modal>
+      )}
+
       {/* Create Modal */}
       {showCreate && (
         <Modal
           title="Create New Project"
-          onClose={() => setShowCreate(false)}
+          onClose={() => { setShowCreate(false); setForm({ name: '', description: '', dataType: 'image', labelSet: '', organizationId: '' }); }}
           footer={
             <>
-              <button className="btn btn-default" onClick={() => setShowCreate(false)}>Cancel</button>
+              <button className="btn btn-default" onClick={() => { setShowCreate(false); setForm({ name: '', description: '', dataType: 'image', labelSet: '', organizationId: '' }); }}>Cancel</button>
               <button className="btn btn-primary" onClick={handleCreate} disabled={saving || !form.name.trim()}>
                 {saving ? <><span className="spinner spinner-sm" /> Creating…</> : 'Create Project'}
               </button>
@@ -519,6 +627,16 @@ export default function Projects() {
               <select className="input" value={form.dataType} onChange={e => setForm(f => ({ ...f, dataType: e.target.value }))}>
                 {DATA_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
               </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Tenant (Organisation)</label>
+              <select className="input" value={form.organizationId} onChange={e => setForm(f => ({ ...f, organizationId: e.target.value }))}>
+                <option value="">— No tenant —</option>
+                {tenants.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              <p className="form-hint">Assign this project to a tenant to control who can see it.</p>
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">Initial Labels</label>
@@ -559,26 +677,27 @@ function CardMenuItem({ icon, label, onClick, danger }: { icon: React.ReactNode;
 function CardSubMenuItem({ label, items }: { label: string; items: { label: string; active: boolean; onClick: () => void }[] }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ position: 'relative' }} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-      <button className="dropdown-item" style={{ justifyContent: 'space-between' }}>
+    <>
+      <button className="dropdown-item" style={{ justifyContent: 'space-between' }} onClick={() => setOpen(o => !o)}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           {label}
         </span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
       </button>
-      {open && (
-        <div style={{ position: 'absolute', right: '100%', top: 0, marginRight: 4, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: 'var(--shadow-md)', minWidth: 160, zIndex: 1100, overflow: 'hidden' }}>
-          {items.map(item => (
-            <button key={item.label} className="dropdown-item"
-              style={item.active ? { background: 'var(--primary-light)', color: 'var(--primary)', fontWeight: 600 } : {}}
-              onClick={item.onClick}>
-              {item.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {open && items.map(item => (
+        <button key={item.label} className="dropdown-item"
+          style={{ paddingLeft: 32, ...(item.active ? { background: 'var(--primary-light)', color: 'var(--primary)', fontWeight: 600 } : {}) }}
+          onClick={item.onClick}>
+          {item.active
+            ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+            : <span style={{ width: 12, display: 'inline-block' }} />}
+          {item.label}
+        </button>
+      ))}
+    </>
   );
 }

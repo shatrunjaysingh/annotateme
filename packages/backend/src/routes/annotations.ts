@@ -64,7 +64,8 @@ router.get("/tree", async (req: AuthRequest, res) => {
           json_array_length(COALESCE(a.shapes, '[]'::json))
         ), 0)                                 AS "shapeCount",
         MAX(a."updatedAt")                    AS "lastAnnotatedAt",
-        u.username                            AS "assignee"
+        u.username                            AS "assignee",
+        j."assigneeId"::text                  AS "assigneeId"
       FROM projects p
       LEFT JOIN organizations o ON o.id = p."organizationId"
       JOIN tasks t  ON t."projectId" = p.id
@@ -74,7 +75,7 @@ router.get("/tree", async (req: AuthRequest, res) => {
       WHERE ($1 OR j."assigneeId" = $2::uuid OR p."createdById" = $2::uuid)
       GROUP BY o.id, o.name, p.id, p.name, p."dataType",
                t.id, t.name, j.id, j.stage, j.state,
-               j."frameStart", j."frameEnd", u.username
+               j."frameStart", j."frameEnd", u.username, j."assigneeId"
       ORDER BY o.name NULLS LAST, p.name, t.name, j."frameStart"
     `, [isAdmin, userId]);
 
@@ -105,7 +106,7 @@ router.get("/tree", async (req: AuthRequest, res) => {
         id: r.jobId, stage: r.stage, state: r.state,
         frameStart: r.frameStart, frameEnd: r.frameEnd, totalFrames,
         annotatedFrames, shapeCount,
-        lastAnnotatedAt: r.lastAnnotatedAt, assignee: r.assignee,
+        lastAnnotatedAt: r.lastAnnotatedAt, assignee: r.assignee, assigneeId: r.assigneeId || null,
       });
     }
 

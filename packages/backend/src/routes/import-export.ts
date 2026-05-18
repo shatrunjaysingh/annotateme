@@ -8,6 +8,7 @@ import { Project } from "../entities/Project";
 import { File as FileEntity } from "../entities/File";
 import { Annotation } from "../entities/Annotation";
 import { Task } from "../entities/Task";
+import { Job } from "../entities/Job";
 import { authMiddleware, AuthRequest } from "../middlewares/auth";
 import { FormatConverter } from "../services/format-converter";
 import * as StorageService from "../services/storage.service";
@@ -21,6 +22,7 @@ const projectRepo = AppDataSource.getRepository(Project);
 const fileRepo = AppDataSource.getRepository(FileEntity);
 const annotationRepo = AppDataSource.getRepository(Annotation);
 const taskRepo = AppDataSource.getRepository(Task);
+const jobRepo  = AppDataSource.getRepository(Job);
 
 // ── Storage mode info ────────────────────────────────────────────────────────
 router.get("/storage-mode", (_req, res) => {
@@ -114,15 +116,18 @@ router.post("/:projectId/import", upload.single("file"), async (req: AuthRequest
     try {
       if (detectedFormat === "coco") {
         const cocoData = JSON.parse(fileContent);
-        if (!FormatConverter.validateCOCO(cocoData)) return res.status(400).json({ error: "Invalid COCO format" });
+        const cocoValidation = FormatConverter.validateCOCO(cocoData);
+        if (!cocoValidation.valid) return res.status(400).json({ error: "Invalid COCO format", details: cocoValidation.errors });
         unifiedAnnotations = FormatConverter.cocoToUnified(cocoData);
       } else if (detectedFormat === "pascal_voc") {
         const vocData = JSON.parse(fileContent);
-        if (!FormatConverter.validatePascalVOC(vocData)) return res.status(400).json({ error: "Invalid Pascal VOC format" });
+        const vocValidation = FormatConverter.validatePascalVOC(vocData);
+        if (!vocValidation.valid) return res.status(400).json({ error: "Invalid Pascal VOC format", details: vocValidation.errors });
         unifiedAnnotations = FormatConverter.pascalVocToUnified(vocData);
       } else if (detectedFormat === "yolo") {
         const yoloData = JSON.parse(fileContent);
-        if (!FormatConverter.validateYOLO(yoloData)) return res.status(400).json({ error: "Invalid YOLO format" });
+        const yoloValidation = FormatConverter.validateYOLO(yoloData);
+        if (!yoloValidation.valid) return res.status(400).json({ error: "Invalid YOLO format", details: yoloValidation.errors });
         const classNames = req.body.classNames || yoloData.classNames || [];
         unifiedAnnotations = FormatConverter.yoloToUnified(yoloData, classNames);
       } else if (detectedFormat === "csv") {
@@ -262,6 +267,115 @@ router.get("/:projectId/files", async (req: AuthRequest, res) => {
     res.json({ count: files.length, files });
   } catch (error) {
     res.status(500).json({ error: "Failed to list files" });
+  }
+});
+
+// ── Export all annotation work for a project ─────────────────────────────────
+// Walks project → tasks → jobs → annotations using three repo queries so there
+// are no raw SQL column-quoting issues.
+router.get("/:projectId/annotations/export", async (req: AuthRequest, res) => {
+  try {
+    const { projectId } = req.params;
+
+    const project = await projectRepo.findOne({ where: { id: projectId } });
+    if (!project) return res.status(404).json({ error: "Project not found" });
+
+    // 1. All tasks for this project
+    const tasks = await taskRepo.find({
+      where: { projectId },
+      order: { name: "ASC" },
+    });
+
+    if (tasks.length === 0) {
+      const empty = {
+        version: "1.0",
+        exportedAt: new Date().toISOString(),
+        project: { id: project.id, name: project.name, dataType: project.dataType, labelSet: project.labelSet || [] },
+        tasks: [],
+        totalFrames: 0,
+      };
+      const fname = `${project.name.replace(/[^a-z0-9]/gi, "_")}-annotations.json`;
+      res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+      res.setHeader("Content-Type", "application/json");
+      return res.send(JSON.stringify(empty, null, 2));
+    }
+
+    const taskIds = tasks.map(t => t.id);
+
+    // 2. All jobs for those tasks
+    const jobs = await jobRepo
+      .createQueryBuilder("j")
+      .where("j.taskId IN (:...taskIds)", { taskIds })
+      .orderBy("j.taskId")
+      .addOrderBy("j.id")
+      .getMany();
+
+    const jobIds = jobs.map(j => j.id);
+
+    // 3. All annotations for those jobs
+    let annotations: Annotation[] = [];
+    if (jobIds.length > 0) {
+      annotations = await annotationRepo
+        .createQueryBuilder("a")
+        .where("a.jobId IN (:...jobIds)", { jobIds })
+        .orderBy("a.jobId")
+        .addOrderBy("a.frameNumber")
+        .getMany();
+    }
+
+    // Group annotations by jobId
+    const annByJob = new Map<string, Annotation[]>();
+    for (const a of annotations) {
+      if (!annByJob.has(a.jobId)) annByJob.set(a.jobId, []);
+      annByJob.get(a.jobId)!.push(a);
+    }
+
+    // Group jobs by taskId
+    const jobsByTask = new Map<string, typeof jobs>();
+    for (const j of jobs) {
+      if (!jobsByTask.has(j.taskId)) jobsByTask.set(j.taskId, []);
+      jobsByTask.get(j.taskId)!.push(j);
+    }
+
+    const exportData = {
+      version: "1.0",
+      exportedAt: new Date().toISOString(),
+      project: {
+        id: project.id,
+        name: project.name,
+        dataType: project.dataType,
+        labelSet: project.labelSet || [],
+      },
+      tasks: tasks.map(t => ({
+        id: t.id,
+        name: t.name,
+        subset: t.subset,
+        frameCount: t.frameCount,
+        jobs: (jobsByTask.get(t.id) || []).map(j => ({
+          id: j.id,
+          stage: j.stage,
+          state: j.state,
+          frameStart: j.frameStart,
+          frameEnd: j.frameEnd,
+          frames: (annByJob.get(j.id) || []).map(a => ({
+            frameNumber: a.frameNumber,
+            shapes: a.shapes || [],
+            tags: a.tags || [],
+            tracks: a.tracks || [],
+            updatedAt: a.updatedAt,
+          })),
+        })),
+      })),
+      totalFrames: annotations.length,
+    };
+
+    const filename = `${project.name.replace(/[^a-z0-9]/gi, "_")}-annotations.json`;
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Type", "application/json");
+    res.send(JSON.stringify(exportData, null, 2));
+  } catch (error: any) {
+    console.error("Annotations export error:", error);
+    res.status(500).json({ error: error.message || "Failed to export annotations" });
   }
 });
 
