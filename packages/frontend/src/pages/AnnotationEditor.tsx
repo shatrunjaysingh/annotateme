@@ -36,9 +36,10 @@ const TOOL_ICONS: Record<ToolType, React.ReactNode> = {
   polyline: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3,18 9,8 15,14 21,4"/></svg>,
   point: <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>,
   ellipse: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="12" rx="10" ry="6"/></svg>,
+  segment: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/><path d="M17.8 11.8 19 13"/><path d="M15 9h.01"/><path d="M17.8 6.2 19 5"/><path d="m3 21 9-9"/><path d="M12.2 6.2 11 5"/></svg>,
 };
-const TOOL_KEYS: Record<ToolType, string> = { select: 'S', rect: 'R', polygon: 'P', polyline: 'L', point: 'D', ellipse: 'E' };
-const TOOL_LABELS: Record<ToolType, string> = { select: 'Select', rect: 'Rectangle', polygon: 'Polygon', polyline: 'Polyline', point: 'Point', ellipse: 'Ellipse' };
+const TOOL_KEYS: Record<ToolType, string> = { select: 'S', rect: 'R', polygon: 'P', polyline: 'L', point: 'D', ellipse: 'E', segment: 'M' };
+const TOOL_LABELS: Record<ToolType, string> = { select: 'Select', rect: 'Rectangle', polygon: 'Polygon', polyline: 'Polyline', point: 'Point', ellipse: 'Ellipse', segment: 'Segment (SAM)' };
 
 type SortBy = 'id' | 'id_desc' | 'label' | 'area';
 type ColorBy = 'label' | 'instance';
@@ -144,6 +145,9 @@ export default function AnnotationEditor() {
   const [showAddLabel, setShowAddLabel] = useState(false);
   const [newLabelName, setNewLabelName] = useState('');
   const [addingLabel, setAddingLabel] = useState(false);
+
+  // SAM interactive segmentation
+  const [segmenting, setSegmenting] = useState(false);
 
   // AI auto-annotation
   const [aiLoading, setAiLoading] = useState(false);
@@ -567,7 +571,7 @@ export default function AnnotationEditor() {
 
       // 2D tool keys only fire in 2D mode (avoids conflict with 3D nudge keys)
       if (viewMode === '2d') {
-        const toolMap: Record<string, ToolType> = { s: 'select', r: 'rect', p: 'polygon', l: 'polyline', d: 'point', e: 'ellipse' };
+        const toolMap: Record<string, ToolType> = { s: 'select', r: 'rect', p: 'polygon', l: 'polyline', d: 'point', e: 'ellipse', m: 'segment' };
         const tool = toolMap[e.key.toLowerCase()];
         if (tool) { setTool(tool); return; }
       }
@@ -679,6 +683,33 @@ export default function AnnotationEditor() {
     setMenuOpen(false);
     e.target.value = '';
   }, [jobId, frameNum, setShapes, toast]);
+
+  // SAM interactive segmentation handler
+  const handleSegmentClick = useCallback(async (imgX: number, imgY: number) => {
+    if (!jobId) return;
+    setSegmenting(true);
+    try {
+      const { data } = await client.post('/ai/segment', { jobId, frameIndex: frameNum, x: imgX, y: imgY });
+      const pts: { x: number; y: number }[] = data.points || [];
+      if (pts.length >= 3) {
+        addShape({
+          id: crypto.randomUUID(),
+          type: 'polygon',
+          label: selectedLabel || 'object',
+          color: selectedLabelColor,
+          points: pts,
+        });
+        toast.success('Segmented', `${pts.length}-point polygon created`);
+      } else {
+        toast.warning('No mask found', 'SAM could not find an object at that point — try clicking closer to the center of the object.');
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.detail || 'AI service unavailable';
+      toast.error('Segmentation failed', msg);
+    } finally {
+      setSegmenting(false);
+    }
+  }, [jobId, frameNum, selectedLabel, selectedLabelColor, addShape, toast]);
 
   const handleExport = useCallback(async () => {
     if (!jobId) return;
@@ -1575,15 +1606,26 @@ export default function AnnotationEditor() {
         {/* LEFT TOOLBAR */}
         <div style={{ width: 48, background: '#fff', borderRight: '1px solid #e8e8e8', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '8px 0', gap: 2, flexShrink: 0 }}>
           {viewMode === '2d' ? (
-            (Object.keys(TOOL_ICONS) as ToolType[]).map(tool => (
-              <button key={tool} title={tool === 'select' ? 'Select (S) — click a shape to select it, drag to move, drag handles to resize' : `${TOOL_LABELS[tool]} (${TOOL_KEYS[tool]})`}
+            <>
+              {(Object.keys(TOOL_ICONS) as ToolType[]).filter(t => t !== 'segment').map(tool => (
+                <button key={tool} title={tool === 'select' ? 'Select (S) — click a shape to select it, drag to move, drag handles to resize' : `${TOOL_LABELS[tool]} (${TOOL_KEYS[tool]})`}
+                  disabled={!isEditable}
+                  style={{ width: 36, height: 36, border: 'none', borderRadius: 6, cursor: isEditable ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', background: currentTool === tool ? '#e6f4ff' : 'transparent', color: currentTool === tool ? '#1890ff' : '#595959', transition: 'all 0.15s', position: 'relative', opacity: isEditable ? 1 : 0.4 }}
+                  onClick={() => setTool(tool)}>
+                  {TOOL_ICONS[tool]}
+                  {currentTool === tool && <span style={{ position: 'absolute', left: 2, top: '50%', transform: 'translateY(-50%)', width: 3, height: 20, background: '#1890ff', borderRadius: 2 }} />}
+                </button>
+              ))}
+              {/* SAM segmentation tool — separated visually */}
+              <div style={{ width: 28, height: 1, background: '#f0f0f0', margin: '4px 0' }} />
+              <button key="segment" title="Segment (M) — click any object for instant AI-powered polygon mask"
                 disabled={!isEditable}
-                style={{ width: 36, height: 36, border: 'none', borderRadius: 6, cursor: isEditable ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', background: currentTool === tool ? '#e6f4ff' : 'transparent', color: currentTool === tool ? '#1890ff' : '#595959', transition: 'all 0.15s', position: 'relative', opacity: isEditable ? 1 : 0.4 }}
-                onClick={() => setTool(tool)}>
-                {TOOL_ICONS[tool]}
-                {currentTool === tool && <span style={{ position: 'absolute', left: 2, top: '50%', transform: 'translateY(-50%)', width: 3, height: 20, background: '#1890ff', borderRadius: 2 }} />}
+                style={{ width: 36, height: 36, border: currentTool === 'segment' ? '1px solid #722ed1' : 'none', borderRadius: 6, cursor: isEditable ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', background: currentTool === 'segment' ? '#f9f0ff' : 'transparent', color: currentTool === 'segment' ? '#722ed1' : '#595959', transition: 'all 0.15s', position: 'relative', opacity: isEditable ? 1 : 0.4 }}
+                onClick={() => setTool('segment')}>
+                {TOOL_ICONS['segment']}
+                {currentTool === 'segment' && <span style={{ position: 'absolute', left: 2, top: '50%', transform: 'translateY(-50%)', width: 3, height: 20, background: '#722ed1', borderRadius: 2 }} />}
               </button>
-            ))
+            </>
           ) : (
             <>
               {/* 3D: Select */}
@@ -1721,6 +1763,8 @@ export default function AnnotationEditor() {
                 outlinedBorders={outlinedBorders}
                 fillOpacity={fillOpacity}
                 selectedOpacity={selectedOpacity}
+                onSegmentClick={handleSegmentClick}
+                segmenting={segmenting}
               />
             </div>
           )}

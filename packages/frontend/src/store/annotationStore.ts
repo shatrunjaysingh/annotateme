@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type ToolType = 'select' | 'rect' | 'polygon' | 'point' | 'polyline' | 'ellipse';
+export type ToolType = 'select' | 'rect' | 'polygon' | 'point' | 'polyline' | 'ellipse' | 'segment';
 
 export interface Point { x: number; y: number; }
 

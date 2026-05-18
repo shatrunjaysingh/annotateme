@@ -373,6 +373,28 @@ async def predict(
     }
 
 
+@app.post("/segment")
+async def segment_point(
+    image: UploadFile = File(...),
+    x: float = Form(...),
+    y: float = Form(...),
+):
+    """Point-prompted SAM segmentation. Returns polygon contour in image pixel coords."""
+    from model import sam_segmenter
+    img_bytes = await image.read()
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    try:
+        points = sam_segmenter.segment(img, x, y)
+        return {
+            "points": points,
+            "image_width": img.width,
+            "image_height": img.height,
+            "count": len(points),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SAM segmentation failed: {str(e)}")
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

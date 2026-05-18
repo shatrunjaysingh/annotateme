@@ -226,4 +226,121 @@ router.post("/annotate", authMiddleware, async (req: AuthRequest, res: Response)
   }
 });
 
+// ── POST /api/ai/segment ──────────────────────────────────────────────────────
+// Body: { jobId: string, frameIndex: number, x: number, y: number }
+// Returns: { points: {x,y}[], image_width, image_height, count }
+router.post("/segment", authMiddleware, async (req: AuthRequest, res: Response) => {
+  const { jobId, frameIndex, x, y } = req.body as {
+    jobId: string;
+    frameIndex: number;
+    x: number;
+    y: number;
+  };
+
+  if (!jobId || frameIndex == null || x == null || y == null) {
+    res.status(400).json({ error: "jobId, frameIndex, x, and y are required" });
+    return;
+  }
+
+  try {
+    // 1. Resolve taskId from the job
+    const jobRows = await AppDataSource.query(
+      `SELECT j."taskId"
+       FROM jobs j JOIN tasks t ON j."taskId" = t.id
+       WHERE j.id = $1`,
+      [jobId]
+    );
+
+    if (!jobRows.length) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    const { taskId } = jobRows[0];
+
+    // 2. Find the file for this frame
+    const fileRows = await AppDataSource.query(
+      `SELECT url, "originalName" FROM files WHERE "taskId" = $1 AND "frameNumber" = $2 LIMIT 1`,
+      [taskId, frameIndex]
+    );
+
+    if (!fileRows.length) {
+      res.status(404).json({ error: `No file found for frame ${frameIndex}` });
+      return;
+    }
+
+    const fileUrl: string = fileRows[0].url;
+
+    // 3. Read image from local filesystem (uploads directory)
+    const relativePath = fileUrl.replace(/^\/uploads\//, "");
+    const absPath = path.join(UPLOAD_DIR, relativePath);
+
+    if (!fs.existsSync(absPath)) {
+      res.status(404).json({ error: `Image file not found on disk: ${relativePath}` });
+      return;
+    }
+
+    // 4. Read image (extract frame from video if needed)
+    const ext = path.extname(absPath).toLowerCase();
+    let imageBuffer: Buffer;
+    let contentType: string;
+
+    if (VIDEO_EXTS.has(ext)) {
+      try {
+        imageBuffer = extractVideoFrame(absPath, frameIndex);
+        contentType = "image/png";
+      } catch (err: any) {
+        res.status(500).json({ error: `Failed to extract frame ${frameIndex} from video: ${err.message}` });
+        return;
+      }
+    } else {
+      imageBuffer = fs.readFileSync(absPath);
+      contentType =
+        ext === ".png" ? "image/png" :
+        ext === ".webp" ? "image/webp" :
+        "image/jpeg";
+    }
+
+    // 5. POST to AI service /segment with FormData { image, x, y }
+    const form = new FormData();
+    form.append("image", imageBuffer, {
+      filename: path.basename(absPath),
+      contentType,
+      knownLength: imageBuffer.length,
+    });
+    form.append("x", String(x));
+    form.append("y", String(y));
+
+    const aiResp = await fetch(`${AI_SERVICE_URL}/segment`, {
+      method: "POST",
+      body: form,
+      headers: form.getHeaders(),
+      signal: AbortSignal.timeout(120_000), // 2 min — SAM may download weights on first use
+    });
+
+    if (!aiResp.ok) {
+      let errMsg = `AI service error (HTTP ${aiResp.status})`;
+      try {
+        const body = await aiResp.json() as any;
+        errMsg = body.detail || body.error || errMsg;
+      } catch {
+        errMsg = (await aiResp.text()) || errMsg;
+      }
+      res.status(502).json({ error: errMsg });
+      return;
+    }
+
+    // 6. Return the response JSON directly
+    const aiData = await aiResp.json();
+    res.json(aiData);
+  } catch (err: any) {
+    if (err.name === "TimeoutError" || err.name === "AbortError" || err.type === "aborted") {
+      res.status(504).json({ error: "AI service timed out. SAM may be downloading weights on first use. Please try again." });
+      return;
+    }
+    console.error("Segment error:", err);
+    res.status(500).json({ error: err.message || "Segmentation failed" });
+  }
+});
+
 export default router;

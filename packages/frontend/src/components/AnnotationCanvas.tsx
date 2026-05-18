@@ -125,9 +125,11 @@ interface Props {
   outlinedBorders?: boolean;
   fillOpacity?: number;
   selectedOpacity?: number;
+  onSegmentClick?: (imgX: number, imgY: number) => void;
+  segmenting?: boolean;
 }
 
-export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, colorBy = 'label', hiddenLabels = new Set(), outlinedBorders = false, fillOpacity = 0.25, selectedOpacity = 0.55 }: Props) {
+export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, colorBy = 'label', hiddenLabels = new Set(), outlinedBorders = false, fillOpacity = 0.25, selectedOpacity = 0.55, onSegmentClick, segmenting = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -466,6 +468,12 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
       return;
     }
 
+    // SAM segmentation — fire callback, canvas just shows loading state
+    if (currentTool === 'segment') {
+      if (onSegmentClick && !segmenting) onSegmentClick(imgPt.x, imgPt.y);
+      return;
+    }
+
     // Drawing
     if (currentTool === 'point') {
       const color = getColor(selectedLabel || '');
@@ -642,7 +650,7 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
   }, [deleteShape, selectShape, undo, redo, fitImage, draw]);
 
   const cursorForTool: Record<ToolType, string> = {
-    select: 'default', rect: 'crosshair', polygon: 'crosshair', point: 'crosshair', polyline: 'crosshair', ellipse: 'crosshair',
+    select: 'default', rect: 'crosshair', polygon: 'crosshair', point: 'crosshair', polyline: 'crosshair', ellipse: 'crosshair', segment: segmenting ? 'wait' : 'cell',
   };
 
   return (
@@ -661,6 +669,21 @@ export default function AnnotationCanvas({ imageUrl, jobId, frameNum, labels, co
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.3)', pointerEvents: 'none' }}>
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
           <p style={{ marginTop: 12, fontSize: 14 }}>No image loaded</p>
+        </div>
+      )}
+      {/* SAM segmentation loading overlay */}
+      {segmenting && (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 20 }}>
+          <div style={{ background: 'rgba(0,0,0,0.75)', borderRadius: 10, padding: '14px 22px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span className="spinner" style={{ width: 18, height: 18, borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)', borderTopColor: '#fff' }} />
+            <span style={{ color: '#fff', fontSize: 14, fontWeight: 500 }}>Segmenting…</span>
+          </div>
+        </div>
+      )}
+      {/* Segment tool hint */}
+      {currentTool === 'segment' && !segmenting && imageUrl && (
+        <div style={{ position: 'absolute', bottom: 32, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.65)', color: '#fff', fontSize: 12, padding: '5px 14px', borderRadius: 20, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+          Click anywhere on the object to segment
         </div>
       )}
       {/* Zoom indicator */}

@@ -774,3 +774,51 @@ active_model: BaseAnnotationModel = MockModel()
 # active_model = ProductionModel(weights="yolov8l-seg.pt", conf=0.01)      # large  (~88 MB, best accuracy)
 # active_model = ProductionModel(weights="runs/segment/train/weights/best.pt", conf=0.01)  # your fine-tuned
 # active_model = CustomModel()                                              # your own architecture
+
+
+# ─────────────────────────── SAM point segmenter ────────────────────────────
+
+class SAMSegmenter:
+    """Singleton wrapper around Ultralytics SAM for point-prompted segmentation."""
+    _instance = None
+
+    def __init__(self, weights: str = "mobile_sam.pt"):
+        # mobile_sam.pt is ~40MB vs sam_b.pt 375MB — good default for CPU
+        self._weights = weights
+        self._model = None  # lazy-load on first use
+
+    def _load(self):
+        if self._model is None:
+            from ultralytics import SAM
+            self._model = SAM(self._weights)
+
+    def segment(self, image, x: float, y: float):
+        """
+        image: PIL.Image
+        x, y: pixel coordinates in the image
+        Returns list of {"x": float, "y": float} dicts (polygon vertices).
+        Returns [] if no mask found.
+        """
+        self._load()
+        import cv2, numpy as np
+        results = self._model.predict(image, points=[[x, y]], labels=[1], verbose=False)
+        if not results or results[0].masks is None:
+            return []
+        # Take the first (highest-confidence) mask
+        mask = results[0].masks.data[0].cpu().numpy()  # shape: (H, W) float32 0..1
+        mask_uint8 = (mask > 0.5).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return []
+        largest = max(contours, key=cv2.contourArea)
+        # Simplify with Ramer-Douglas-Peucker
+        epsilon = 0.005 * cv2.arcLength(largest, True)
+        approx = cv2.approxPolyDP(largest, epsilon, True)
+        # Scale from mask resolution back to image resolution
+        mh, mw = mask.shape
+        img_w, img_h = image.size
+        sx, sy = img_w / mw, img_h / mh
+        return [{"x": float(p[0][0] * sx), "y": float(p[0][1] * sy)} for p in approx]
+
+
+sam_segmenter = SAMSegmenter()
